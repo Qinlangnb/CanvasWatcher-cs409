@@ -8,7 +8,7 @@ export default defineConfig(({ mode }) => {
   const viteBase = publicBasePath ? `${publicBasePath}/` : "/";
   const apiPrefix = publicBasePath ? `${publicBasePath}/api` : "/api";
   const proxy = {
-    target: env.VITE_API_PROXY || "http://backend:8000",
+    target: env.VITE_API_PROXY || "http://localhost:8000",
     ...(publicBasePath ? { rewrite: (path: string) => path.slice(publicBasePath.length) } : {}),
   };
   return {

@@ -1,58 +1,80 @@
-# CanvasWatcher / Academic Watcher
+# CanvasWatcher / Academic Watcher — CS409
 
-> **CS409 fork.** This repository is the course-project fork of [CanvasWatcher](https://github.com/Qinlangnb/CanvasWatcher). Its backend is being rewritten in JavaScript (Node.js); the Python services below remain only as a porting reference until the rewrite reaches parity. See the [rewrite plan](docs/cs409/REWRITE_PLAN.zh-CN.md).
+> **CS409 fork.** This repository is the course-project fork of [CanvasWatcher](https://github.com/Qinlangnb/CanvasWatcher). The backend is being rewritten as a single multi-user REST API in **TypeScript on Node.js** (Express, PostgreSQL, Prisma). The original Python services live in [`legacy/`](legacy/README.md) only as a porting reference; they are not built, tested or deployed. See the [rewrite plan](docs/cs409/REWRITE_PLAN.zh-CN.md).
 
-[中文说明](README.zh-CN.md) · [Local deployment](DEPLOYMENT.md) · [Multi-user preview](DEPLOYMENT_MULTIUSER.md) · [GPL-2.0](LICENSE)
+[中文说明](README.zh-CN.md) · [Rewrite plan](docs/cs409/REWRITE_PLAN.zh-CN.md) · [GPL-2.0](LICENSE)
 
-CanvasWatcher collects course materials, deadlines, tasks, and meaningful changes from Canvas and supported course sites. It offers a Today planner, file history, calendar imports, and optional AI assistance. Source synchronization is read-only; AI write actions require explicit confirmation.
-
-The default Docker Compose deployment is a **single-user, local-first** application. This branch also contains an **invitation-only multi-user preview** with an identity gateway, isolated tenant processes and storage, and a `/watcher` public path. The multi-user deployment needs a separately configured HTTPS reverse proxy and a Linux administrator. It is not enabled by the default Compose command.
+CanvasWatcher collects course materials, deadlines, tasks, and meaningful changes from Canvas and supported course sites. It offers a Today planner, file history, calendar imports, and optional AI assistance. Source synchronization is read-only.
 
 ![Today dashboard with synthetic courses and tasks](docs/screenshots/today-demo.png)
 
-*A real application screenshot using synthetic demo data; no personal course records or credentials are shown.*
+*A screenshot of the original application using synthetic demo data.*
 
-## Start locally
+## Rewrite status
 
-From a clone of this repository, install Docker Engine or Docker Desktop with Compose v2, then run:
+| Area | State |
+| --- | --- |
+| Accounts and sessions (`/api/users`, `/api/sessions`) | Done, with tests |
+| Courses, assignments, tasks, Canvas sync | Not started; still in `legacy/backend` |
+| Frontend | Unchanged React app; its pages still call the legacy API paths |
+
+### API so far
+
+| Method and path | Purpose | Success |
+| --- | --- | --- |
+| `GET /api/health` | Database reachability | 200 |
+| `POST /api/users` | Create an account and sign in | 201 |
+| `GET /api/users/me` | The signed-in user | 200 |
+| `PUT /api/users/me/password` | Change the password; signs out other devices | 204 |
+| `POST /api/sessions` | Sign in with username or email | 201 |
+| `DELETE /api/sessions/current` | Sign out this browser | 204 |
+
+Errors are JSON: `{ "detail": "<sentence for the user>", "code": "<MACHINE_CODE>" }`. Validation errors return 422 with `detail` as a list of `{ loc, msg }`. Sessions use an httpOnly cookie; state-changing requests need an allowed `Origin` and, once signed in, the `X-AW-CSRF` header copied from the `aw_csrf` cookie.
+
+## Run the whole stack
+
+Install Docker Desktop (or Docker Engine with Compose v2), then:
 
 ```sh
-cp .env.example .env
-cp config/courses.example.yaml config/courses.runtime.yaml
-cp config/file_rules.example.yaml config/file_rules.yaml
-cp config/availability.example.yaml config/availability.yaml
+cp .env.example .env    # then set SESSION_SECRET to 32+ random characters
 docker compose up -d --build
 ```
 
-Open `http://127.0.0.1:8080`. The API health endpoint is `http://127.0.0.1:8000/api/health`. On Windows, use `Copy-Item` instead of `cp`. See the [deployment guide](DEPLOYMENT.md) for browser sign-in, updates, and backups.
+Open `http://localhost:8080`. nginx serves the frontend and forwards `/api` to the API container; the API port is not published. PostgreSQL listens on `127.0.0.1:5432` only.
 
-## Multi-user preview
+## Develop
 
-The `identity-gateway/` and `ops/azure/` trees contain the tenant gateway, invitation registration, per-user provisioning, Caddy example, and systemd units used by the multi-user variant. Each tenant receives a separate SQLite database, credential store, file tree, process, and disk quota. Gateway-to-tenant traffic uses a Unix socket and an internal token. The example origin `watcher.example.com` must be replaced with your HTTPS domain before installation.
+Requires Node.js 22.12 or newer.
 
-The included Linux installer is intended for an administrator who can inspect and adapt the systemd, Caddy, storage, and network settings. It requires `/etc/academic-watcher/public.env` to be configured first. `ops/azure/import_owner.py` is specifically for migrating an existing single-user installation and requires explicit owner identity arguments. A fresh multi-user installation has no automated first-admin bootstrap in this preview; use the local Compose deployment unless you are implementing that setup yourself. Do not expose the default Compose ports directly to the internet.
+```sh
+docker compose up -d db          # PostgreSQL only
+cd server
+cp .env.example .env             # then set SESSION_SECRET
+npm install                      # also generates the Prisma client
+npm run db:deploy                # apply migrations
+npm run dev                      # API on http://localhost:8000, restarts on save
+```
 
-## Features and limits
+In another terminal, `cd frontend && npm install && npm run dev` serves the UI on `http://localhost:5173` and proxies `/api` to `localhost:8000` (override with `VITE_API_PROXY`).
 
-- Canvas and course-site synchronization, with read-only Gradescope and PrairieLearn adapters. PrairieLearn enrolled-course parsing has not been validated with a real enrolled course.
-- Deadline, task, file, announcement, and grade-release views; read-only ICS calendar import.
-- Optional AI Chat and summaries. Enabling AI may send selected academic context to the model provider you configure.
-- Optional desktop Auth Broker for official browser-based provider sign-in. Passwords and MFA stay on provider pages.
-- SQLite migrations, backend tests, frontend tests, and a Docker Compose development path.
+| Command (in `server/`) | Does |
+| --- | --- |
+| `npm test` | Creates and migrates `canvaswatcher_test`, then runs the Vitest + Supertest suite |
+| `npm run typecheck` | Type-checks source and tests |
+| `npm run build` | Compiles to `dist/` |
+| `npm run db:migrate -- --name <change>` | Creates a migration after editing `prisma/schema.prisma` |
 
-The default local deployment keeps credentials in process memory. Linux operators can [enable persistent encrypted storage](DEPLOYMENT.md#optional-persistent-encrypted-credentials-linux); the multi-user preview provisions a separate key and vault per tenant. Back up `.env`, `data/`, and your runtime configuration before upgrading. Never commit tokens, cookies, databases, browser profiles, or course downloads.
+CI (`.github/workflows/ci.yml`) runs the server checks against a PostgreSQL service and the frontend tests and build.
 
 ## Source tree
 
 | Path | Purpose |
 | --- | --- |
-| `backend/` | FastAPI, source adapters, synchronization, database migrations, AI services |
-| `frontend/` | React and TypeScript interface |
-| `auth-broker/` | Desktop browser sign-in helper |
-| `identity-gateway/` | Invitation, session, and tenant routing gateway |
-| `ops/` | Optional Linux key helper and multi-user deployment templates |
-| `ops/azure/` | Example multi-user Linux provisioning and service files |
+| `server/` | Node.js REST API: Express routes, Prisma schema and migrations, tests |
+| `frontend/` | React and TypeScript interface, served by nginx in Compose |
+| `docs/cs409/` | Rewrite plan and course deliverables |
+| `legacy/` | The original Python backend, gateway and deployment files, kept as a porting reference |
 
-## License and development
+## License
 
-Released under the [GNU General Public License, version 2](LICENSE). Third-party dependencies keep their own licenses. The public history starts after earlier private development; its commits do not cover the full project history. Development involved AI coding agents under human-directed requirements and review.
+Released under the [GNU General Public License, version 2](LICENSE). Third-party dependencies keep their own licenses. Development involved AI coding agents under human-directed requirements and review.

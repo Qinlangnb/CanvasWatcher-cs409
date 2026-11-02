@@ -1,57 +1,80 @@
-# CanvasWatcher / Academic Watcher
+# CanvasWatcher / Academic Watcher — CS409
 
-> **CS409 fork。** 本仓库是 [CanvasWatcher](https://github.com/Qinlangnb/CanvasWatcher) 的课程项目分支，后端正在改写为 JavaScript（Node.js）；下文的 Python 服务在重写达到同等功能前仅作移植对照。详见[重写方案](docs/cs409/REWRITE_PLAN.zh-CN.md)。
+> **CS409 分支。** 本仓库是 [CanvasWatcher](https://github.com/Qinlangnb/CanvasWatcher) 的课程项目分支。后端正在改写为基于 **Node.js + TypeScript** 的单一多用户 REST API（Express、PostgreSQL、Prisma）。原 Python 服务移入 [`legacy/`](legacy/README.md)，仅作移植对照，不再构建、测试或部署。详见[重写方案](docs/cs409/REWRITE_PLAN.zh-CN.md)。
 
-[English README](README.md) · [本地部署说明](DEPLOYMENT.md) · [多用户预览部署](DEPLOYMENT_MULTIUSER.zh-CN.md) · [GPL-2.0](LICENSE)
+[English README](README.md) · [重写方案](docs/cs409/REWRITE_PLAN.zh-CN.md) · [GPL-2.0](LICENSE)
 
-CanvasWatcher 从 Canvas 和受支持的课程网站汇集资料、截止日期、任务与有意义的变更，提供 Today 规划、文件历史、日历导入和可选 AI 辅助。来源同步只读；AI 写入操作需要明确确认。
-
-默认 Docker Compose 部署是**本地优先的单用户应用**。此分支还包含**邀请制多用户预览实现**：身份网关、独立用户进程与存储，以及 `/watcher` 公网路径。多用户部署需要单独配置 HTTPS 反向代理并由 Linux 管理员实施；默认 Compose 命令不会启用它。
+CanvasWatcher 从 Canvas 和受支持的课程网站汇集资料、截止日期、任务与有意义的变更，提供 Today 规划、文件历史、日历导入和可选 AI 辅助。来源同步只读。
 
 ![使用合成课程与任务的 Today 页面](docs/screenshots/today-demo.png)
 
-*截图来自真实运行的应用，使用合成演示数据，不含个人课程记录或凭据。*
+*原版应用截图，使用合成演示数据。*
 
-## 本地启动
+## 重写进度
 
-克隆仓库并安装 Docker Engine 或 Docker Desktop 与 Compose v2 后，在仓库目录运行：
+| 部分 | 状态 |
+| --- | --- |
+| 账号与会话（`/api/users`、`/api/sessions`） | 已完成，有测试 |
+| 课程、作业、任务、Canvas 同步 | 未开始，仍在 `legacy/backend` |
+| 前端 | 沿用原 React 应用，页面仍调用旧 API 路径 |
+
+### 已有 API
+
+| 方法与路径 | 作用 | 成功状态 |
+| --- | --- | --- |
+| `GET /api/health` | 数据库连通检查 | 200 |
+| `POST /api/users` | 注册并登录 | 201 |
+| `GET /api/users/me` | 当前登录用户 | 200 |
+| `PUT /api/users/me/password` | 修改密码，并登出其他设备 | 204 |
+| `POST /api/sessions` | 用用户名或邮箱登录 | 201 |
+| `DELETE /api/sessions/current` | 登出当前浏览器 | 204 |
+
+错误统一为 JSON：`{ "detail": "<给用户看的句子>", "code": "<机器码>" }`；校验错误返回 422，`detail` 为 `{ loc, msg }` 列表。会话使用 httpOnly Cookie；修改状态的请求必须带允许的 `Origin`，登录后还需带 `X-AW-CSRF` 头（取自 `aw_csrf` Cookie）。
+
+## 启动完整服务
+
+安装 Docker Desktop（或 Docker Engine 与 Compose v2）后运行：
 
 ```sh
-cp .env.example .env
-cp config/courses.example.yaml config/courses.runtime.yaml
-cp config/file_rules.example.yaml config/file_rules.yaml
-cp config/availability.example.yaml config/availability.yaml
+cp .env.example .env    # 再把 SESSION_SECRET 设为 32 位以上随机字符
 docker compose up -d --build
 ```
 
-打开 `http://127.0.0.1:8080`；API 健康检查位于 `http://127.0.0.1:8000/api/health`。Windows PowerShell 可用 `Copy-Item` 替代 `cp`。浏览器登录、升级与备份步骤见[部署说明](DEPLOYMENT.md)。
+打开 `http://localhost:8080`。nginx 提供前端并把 `/api` 转发到 API 容器，API 端口不对外发布；PostgreSQL 只监听 `127.0.0.1:5432`。Windows PowerShell 可用 `Copy-Item` 替代 `cp`。
 
-## 多用户预览
+## 开发
 
-`identity-gateway/` 和 `ops/azure/` 包含邀请注册、会话与租户路由、逐用户供应器、Caddy 示例及 systemd 单元。每位用户拥有独立 SQLite 数据库、凭据库、文件树、进程和磁盘配额。网关通过 Unix socket 与内部令牌连接租户。示例域名 `watcher.example.com` 必须在安装前替换为自己的 HTTPS 域名。
+需要 Node.js 22.12 或更新版本。
 
-Linux 安装脚本面向能够检查并调整 systemd、Caddy、存储与网络设置的管理员。安装前须先配置 `/etc/academic-watcher/public.env`。`ops/azure/import_owner.py` 只用于迁移已有单用户安装，必须显式指定原账号信息。本预览版尚无全新多用户安装的自动首位管理员初始化流程；如不准备自行实现该步骤，请使用本地 Compose 部署。不要直接向公网开放默认 Compose 端口。
+```sh
+docker compose up -d db          # 只启动 PostgreSQL
+cd server
+cp .env.example .env             # 再设置 SESSION_SECRET
+npm install                      # 同时生成 Prisma Client
+npm run db:deploy                # 应用迁移
+npm run dev                      # API 运行在 http://localhost:8000，保存即重启
+```
 
-## 功能与限制
+另开终端执行 `cd frontend && npm install && npm run dev`，界面位于 `http://localhost:5173`，`/api` 代理到 `localhost:8000`（可用 `VITE_API_PROXY` 覆盖）。
 
-- Canvas 与课程网站同步；Gradescope、PrairieLearn 适配器只读。PrairieLearn 已选课程解析尚未用真实已选课程验证。
-- 截止日期、任务、文件、公告和成绩发布视图；ICS 日历只读导入。
-- 可选 AI Chat 与概括。启用后，选定学业上下文可能发送给你配置的模型服务商。
-- 可选桌面 Auth Broker，通过提供方官方页面完成浏览器登录；密码和 MFA 留在官方页面。
-- SQLite 迁移、后端与前端测试，以及 Docker Compose 开发部署路径。
+| `server/` 下的命令 | 作用 |
+| --- | --- |
+| `npm test` | 创建并迁移 `canvaswatcher_test`，运行 Vitest + Supertest 测试 |
+| `npm run typecheck` | 检查源码与测试的类型 |
+| `npm run build` | 编译到 `dist/` |
+| `npm run db:migrate -- --name <变更名>` | 修改 `prisma/schema.prisma` 后生成迁移 |
 
-默认本地部署的凭据仅存在进程内存，除非明确启用加密持久化。升级前备份 `.env`、`data/` 和运行配置。不要提交 Token、Cookie、数据库、浏览器配置档或下载的课程文件。
+CI（`.github/workflows/ci.yml`）会在 PostgreSQL 服务上运行后端检查，并运行前端测试与构建。
 
 ## 源码结构
 
 | 路径 | 用途 |
 | --- | --- |
-| `backend/` | FastAPI、来源适配、同步、数据库迁移与 AI 服务 |
-| `frontend/` | React、TypeScript 界面 |
-| `auth-broker/` | 桌面浏览器登录助手 |
-| `identity-gateway/` | 邀请、会话与租户路由网关 |
-| `ops/azure/` | 多用户 Linux 供应与服务配置示例 |
+| `server/` | Node.js REST API：Express 路由、Prisma 数据模型与迁移、测试 |
+| `frontend/` | React、TypeScript 界面，Compose 中由 nginx 提供 |
+| `docs/cs409/` | 重写方案与课程交付文档 |
+| `legacy/` | 原 Python 后端、网关与部署文件，仅作移植对照 |
 
-## 许可与开发
+## 许可
 
-项目采用 [GNU GPL 第 2 版](LICENSE) 发布，第三方依赖保留各自许可。公开提交历史始于早期私有开发之后，不代表完整开发历史。开发过程中使用了 AI 编码代理，由人制定需求并完成审查。
+项目采用 [GNU GPL 第 2 版](LICENSE) 发布，第三方依赖保留各自许可。开发过程中使用了 AI 编码代理，由人制定需求并完成审查。
