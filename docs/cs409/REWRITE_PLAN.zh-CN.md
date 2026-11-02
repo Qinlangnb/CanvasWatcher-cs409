@@ -34,7 +34,7 @@
 | 校验与契约 | zod（`shared/` 包前后端共用）+ zod-to-openapi 生成 OpenAPI，`/api/docs` 提供 Swagger UI | 前端已经在用 zod；REST 接口有可读文档，方便评分和协作 |
 | 数据库 | PostgreSQL 16（本地用 docker compose） | 现有模型是关系型（35 张表、大量外键）；Mongo 需要重新设计文档结构，收益不大 |
 | ORM / 迁移 | Prisma | schema 文件可读、迁移工具成熟，适合多人协作 |
-| 后台任务 | pg-boss（基于 Postgres 的队列，支持 cron、重试、并发限制） | 同步任务按用户入队，无需再引入 Redis |
+| 后台任务 | 数据库租约 + 进程内定时器（第 2 周起；原计划 pg-boss） | `canvas_connections.sync_lease_until` 保证同一用户不并发、可跨进程；定时器每分钟挑出到期的连接。规模只有一个 API 进程，不值得再引入队列服务 |
 | 认证 | 自写 session：随机 token（库里只存哈希）、`httpOnly; Secure; SameSite=Lax` cookie、`X-AW-CSRF` 双提交（前端已实现）、`@node-rs/argon2`、登录限速 | 直接移植现有网关的设计，已在线上验证过 |
 | 凭据加密 | node:crypto AES-256-GCM，主密钥来自环境变量 | 用户的 Canvas token 不以明文入库 |
 | 外部请求 | 原生 `fetch`（undici）+ p-retry + p-limit | 统一一个 HTTP 客户端，带超时、重试和并发上限 |
@@ -55,16 +55,15 @@ CanvasWatcher-cs409/
 ├─ frontend/            现有 React 前端，逐步重构（见第 7 节）
 ├─ server/              新 Node API
 │  ├─ src/
-│  │  ├─ app.ts         Express 装配：helmet、限速、session、CSRF、错误处理
-│  │  ├─ auth/          注册、登录、session、密码
-│  │  ├─ routes/        按资源拆分：courses、tasks、files、changes、today、calendar、settings…
-│  │  ├─ services/      业务逻辑（today 排序、变动检测、计划）——纯函数优先，便于测试
-│  │  ├─ sources/canvas Canvas API 客户端与映射
-│  │  ├─ jobs/          pg-boss 任务：按用户同步、ICS 刷新
-│  │  └─ db/            Prisma client 与按 user_id 限定的仓储层
+│  │  ├─ app.ts         Express 装配：helmet、Origin 检查、session、CSRF、错误处理
+│  │  ├─ auth/          注册、登录、session、密码、登录限速
+│  │  ├─ routes/        按资源拆分：users、sessions、canvas、sync、courses、tasks、files、changes
+│  │  ├─ canvas/        Canvas API 客户端、主机白名单、字段归一化
+│  │  ├─ sync/          同步服务（快照比对、变动事件）与定时器
+│  │  ├─ security/      SecretBox：AES-256-GCM 加密 Canvas token
+│  │  └─ http/          统一错误体与参数解析
 │  ├─ prisma/schema.prisma
-│  └─ tests/
-├─ shared/              zod schema 与 API 类型，前后端共用
+│  └─ tests/            Vitest + Supertest，用假的 Canvas 服务器，不连真实 Canvas
 ├─ legacy/              Python 后端、网关、broker，仅作移植对照；提交课程前删除
 ├─ docs/cs409/          本方案、启发式评估、角色分工、API 说明
 └─ docker-compose.yml   postgres + server + frontend
@@ -89,7 +88,7 @@ CanvasWatcher-cs409/
    | notifications、app_settings | `notifications`、`user_settings` |
    | ai_*、chat_*、analysis_jobs、change_analyses、google_*、change_filter_* | 加分项再建 |
 
-4. **同步流水线**：pg-boss 定时为活跃用户入队 → 每个用户一个同步任务（同一用户不并发）→ Canvas 分页拉取 → 对每个条目算内容哈希，与上次快照比对 → 写变动事件和通知 → 文件只存元数据，下载时按需代理并缓存。
+4. **同步流水线**（第 2 周已实现）：定时器每分钟挑出超过 `SYNC_INTERVAL_MINUTES`（默认 30）未同步的连接，手动同步走 `POST /api/sync`（202 + 轮询）→ 先抢租约，同一用户同时只有一个同步 → Canvas 分页拉取课程、作业、文件、公告（每用户最多 3 门课并发）→ 每个条目算内容哈希，与上次快照比对 → 写变动事件；新加入的课程只记基线，不报变动 → 文件只存元数据，下载时向 Canvas 取新的临时链接并 302 跳转。Canvas 返回 401（或保存的 token 已无法解密）时标记连接需要重连，停止自动同步。
 
 ## 7. 现有代码中的低效部分与重构
 
@@ -130,7 +129,9 @@ CanvasWatcher-cs409/
 - 打开变动时先开弹窗、并行标记已读（现在是先等 `POST /read` 再请求详情的瀑布）。
 - 渲染：聊天行 `memo`；课程卡片的计数用 `useMemo` 建索引；缓存 `Intl.DateTimeFormat`。
 
-**与新后端的接口约定**（前端可原样复用的前提）：字段保持 snake_case；错误体保持 `{"detail": "..."}`（`api.ts:50-61` 依赖它）；任务进度的 `expected_revision / state_revision / applied` 并发语义；ICS 上传的 multipart 字段名；`/sync/run` 改为 202 + 轮询需同步改前端两处。
+**与新后端的接口约定**：字段保持 snake_case；错误体为 `{"detail": "...", "code": "..."}`，校验错误 422 时 `detail` 为 `{loc, msg}` 列表；同步为 202 + 轮询。
+
+**第 2 周的接口决定**：不再照搬旧的 69 个路径（第 6 节第 1 条的“契约优先”只保留字段风格和错误体），而是按资源重新设计 REST 接口（`/api/courses`、`/api/tasks`、`/api/files`、`/api/changes`、`/api/canvas/connection`、`/api/sync`），清单见 README。原因：旧路径是“每用户一个后端进程”时代的产物，大量是动作式路径（`/sync/run`、`/changes/{id}/read`），且很多读接口会写库。前端因此在 `frontend/src/app/` 新写了一套基于 React Router 的界面，旧界面文件暂留在 `frontend/src/` 但已不再加载，第 3 周补齐 Today、Timeline、Calendar 后删除。
 
 ### 7.4 启发式评估的基线问题（第 1 轮评估前已知）
 
@@ -164,10 +165,11 @@ CanvasWatcher-cs409/
 | 5 | 加分项（AI 聊天或 Google 日历选一） | **修订**并做第 2 轮复评，记录前后对比；响应式与可访问性检查 |
 | 6 | 部署、种子演示数据、删除 `legacy/` | 演示准备、文档定稿 |
 
+**进度**：第 1、2 周已完成。第 2 周交付：Canvas 连接（token 加密保存、主机白名单）、手动与定时同步、courses / tasks / files / changes 只读接口及已读、归档两个写操作；前端改为 React Router 单页应用，包含登录、注册、三步引导、首页、课程、课程详情、变动、文件、设置页面，手机底部标签栏、桌面侧边栏，深浅色主题。
+
 ## 10. 风险与待定事项
 
-- **学术诚信**：课程项目基于已有个人项目、且大量代码由 AI 生成，需要先向课程确认是否允许，并在报告中写明来源与各成员的实际贡献。
 - **“JavaScript 后端”的认定**：若课程不接受 TypeScript，改用纯 JS + JSDoc 类型检查。
-- **Canvas 访问**：确认学校 Canvas 允许学生生成个人 access token；不允许时用种子数据 + 公开 ICS 演示。
+- **Canvas 访问**：确认学校 Canvas 允许学生生成个人 access token；不允许时用种子数据 + 公开 ICS 演示。启发式评估的参与者未必有 Canvas token，第 4 周前需要一个演示数据种子。
 - **范围**：严格按第 4 节裁剪；加分项只在 MVP 稳定后开始。
 - **部署隔离**：课程版与线上 Watcher 完全分开（独立数据库、独立域名或路径），不读写线上数据。

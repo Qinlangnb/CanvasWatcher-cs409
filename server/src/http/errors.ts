@@ -17,6 +17,16 @@ export class HttpError extends Error {
   }
 }
 
+/** A problem with one request body field; rendered like a validation error so forms can show it inline. */
+export class FieldError extends Error {
+  constructor(
+    readonly field: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
 export const notFound: RequestHandler = (_req, _res, next) => {
   next(new HttpError(404, "NOT_FOUND", "This address does not exist."));
 };
@@ -34,6 +44,10 @@ export function errorHandler(logger: Logger): ErrorRequestHandler {
         msg: issue.message,
       }));
       res.status(422).json({ detail, code: "VALIDATION_ERROR" });
+      return;
+    }
+    if (error instanceof FieldError) {
+      res.status(422).json({ detail: [{ loc: ["body", error.field], msg: error.message }], code: "VALIDATION_ERROR" });
       return;
     }
     const type = (error as { type?: string } | null)?.type;

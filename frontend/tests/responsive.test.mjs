@@ -15,11 +15,6 @@ function declarations(selector, media) {
   });
   return result;
 }
-test('responsive layer follows historical shell and credential styles', () => {
-  const main = readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8');
-  const imports = [...main.matchAll(/import "(.+\.css)"/g)].map(match => match[1]);
-  assert.equal(imports.at(-1), './responsive.css');
-});
 test('completed Today rows opt out of execution-card minimum height at every width', () => {
   const today = readFileSync(new URL('../src/TodayView.tsx', import.meta.url), 'utf8');
   assert.match(today, /className="work-card completed-work-card"/);

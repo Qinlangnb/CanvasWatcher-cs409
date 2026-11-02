@@ -26,7 +26,4 @@ test('credential tabs wrap without forcing narrow-screen overflow', () => {
   assert.equal(button['min-width'], '0');
   assert.equal(button['max-width'], '100%');
   assert.equal(button['white-space'], 'normal');
-  const imports = [...readFileSync(new URL('../src/main.tsx', import.meta.url), 'utf8')
-    .matchAll(/import "(.+\.css)"/g)].map(match => match[1]);
-  assert.equal(imports.at(-1), './responsive.css');
 });

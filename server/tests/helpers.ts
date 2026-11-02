@@ -5,7 +5,9 @@ import { createApp } from "../src/app.js";
 import { CSRF_COOKIE, CSRF_HEADER } from "../src/auth/sessions.js";
 import { loadConfig } from "../src/config.js";
 import { createDb } from "../src/db.js";
+import { createServices } from "../src/services.js";
 import { testDatabaseUrl } from "./database.js";
+import { CANVAS_ORIGIN, CANVAS_TOKEN, fakeCanvas } from "./fakeCanvas.js";
 
 export const ORIGIN = "http://localhost:5173";
 /** Fixture passwords for the throwaway test database. */
@@ -16,13 +18,20 @@ export const config = loadConfig({
   NODE_ENV: "test",
   DATABASE_URL: testDatabaseUrl(),
   SESSION_SECRET: "test-session-secret-0123456789abcdef",
+  CREDENTIALS_KEY: Buffer.alloc(32, 7).toString("base64"),
   ALLOWED_ORIGINS: ORIGIN,
+  CANVAS_ALLOWED_HOSTS: new URL(CANVAS_ORIGIN).hostname,
+  SYNC_INTERVAL_MINUTES: "0",
   LOG_LEVEL: "silent",
 });
 export const db = createDb(config.databaseUrl);
-export const app = createApp({ config, db, logger: pino({ level: "silent" }) });
+const logger = pino({ level: "silent" });
+export const services = createServices({ config, db, logger, canvas: fakeCanvas.factory });
+export const app = createApp({ config, db, logger, services });
 
+/** Waits for background syncs, then empties every table (user data cascades from users). */
 export async function resetDatabase(): Promise<void> {
+  await services.sync.whenIdle();
   await db.$executeRaw`TRUNCATE users, sessions, login_attempts CASCADE`;
 }
 
@@ -37,7 +46,7 @@ export function cookieLine(res: Response, name: string): string {
   return setCookieLines(res).find((line) => line.startsWith(`${name}=`)) ?? "";
 }
 
-type Method = "get" | "post" | "put" | "delete";
+type Method = "get" | "post" | "put" | "patch" | "delete";
 
 interface SendOptions {
   body?: object;
@@ -84,4 +93,24 @@ export async function signUp(fields: Record<string, string> = {}): Promise<Brows
   });
   expect(res.status).toBe(201);
   return browser;
+}
+
+/** Connects the fake Canvas for this browser's user and waits for the first sync to finish. */
+export async function connectCanvas(browser: Browser): Promise<Response> {
+  const res = await browser.send("put", "/api/canvas/connection", {
+    body: { base_url: CANVAS_ORIGIN, access_token: CANVAS_TOKEN },
+  });
+  expect(res.status).toBe(200);
+  await services.sync.whenIdle();
+  return res;
+}
+
+/** Runs a manual sync to completion and returns the finished run. */
+export async function syncNow(browser: Browser): Promise<Record<string, unknown>> {
+  const res = await browser.send("post", "/api/sync");
+  expect(res.status).toBe(202);
+  await services.sync.whenIdle();
+  const run = await browser.send("get", `/api/sync/runs/${res.body.id}`);
+  expect(run.status).toBe(200);
+  return run.body;
 }

@@ -14,9 +14,11 @@ CanvasWatcher collects course materials, deadlines, tasks, and meaningful change
 
 | Area | State |
 | --- | --- |
-| Accounts and sessions (`/api/users`, `/api/sessions`) | Done, with tests |
-| Courses, assignments, tasks, Canvas sync | Not started; still in `legacy/backend` |
-| Frontend | Unchanged React app; its pages still call the legacy API paths |
+| Accounts and sessions | Done (week 1), with tests |
+| Canvas connection, manual and scheduled sync | Done (week 2), tested against a fake Canvas server |
+| Courses, tasks, files, changes (read, mark read, archive) | Done (week 2) |
+| Frontend | Rewritten in `frontend/src/app` with React Router: sign-in, sign-up, onboarding, Home, Courses, Changes, Files, Settings |
+| Today, Timeline, Calendar, task edits | Week 3; the old screens in `frontend/src` are no longer loaded and will be deleted then |
 
 ### API so far
 
@@ -28,6 +30,21 @@ CanvasWatcher collects course materials, deadlines, tasks, and meaningful change
 | `PUT /api/users/me/password` | Change the password; signs out other devices | 204 |
 | `POST /api/sessions` | Sign in with username or email | 201 |
 | `DELETE /api/sessions/current` | Sign out this browser | 204 |
+| `GET /api/canvas/connection` | Canvas site, account, status and last sync | 200 |
+| `PUT /api/canvas/connection` | Check a Canvas access token, store it encrypted, start the first sync | 200 |
+| `DELETE /api/canvas/connection` | Delete the token and everything synced | 204 |
+| `POST /api/sync` | Start a sync; poll the run in `Location` | 202 |
+| `GET /api/sync/runs/latest`, `GET /api/sync/runs/{id}` | Sync progress and result | 200 |
+| `GET /api/courses[?archived=true]` | Active (or only archived) courses with counts | 200 |
+| `GET /api/courses/{id}`, `PATCH /api/courses/{id}` | One course; archive or restore it | 200 |
+| `GET /api/tasks[?course_id=&status=all]` | Open tasks (or all) by due date, undated last | 200 |
+| `GET /api/files[?course_id=&q=]` | File metadata, newest first | 200 |
+| `GET /api/files/{id}/download` | Redirect to a fresh Canvas download link | 302 |
+| `GET /api/changes[?course_id=&unread=&limit=&before=]` | Change feed, newest first, cursor paging | 200 |
+| `GET /api/changes/unread-count`, `POST /api/changes/mark-all-read` | Unread badge; mark all (or one course) read | 200 |
+| `GET /api/changes/{id}`, `PATCH /api/changes/{id}` | One change with before/after values; set `read` | 200 |
+
+Only `canvas.illinois.edu` and `*.instructure.com` can be connected by default (`CANVAS_ALLOWED_HOSTS`). Each account syncs every `SYNC_INTERVAL_MINUTES` (default 30) while connected; a token Canvas rejects stops automatic syncs until the user reconnects.
 
 Errors are JSON: `{ "detail": "<sentence for the user>", "code": "<MACHINE_CODE>" }`. Validation errors return 422 with `detail` as a list of `{ loc, msg }`. Sessions use an httpOnly cookie; state-changing requests need an allowed `Origin` and, once signed in, the `X-AW-CSRF` header copied from the `aw_csrf` cookie.
 
@@ -36,7 +53,7 @@ Errors are JSON: `{ "detail": "<sentence for the user>", "code": "<MACHINE_CODE>
 Install Docker Desktop (or Docker Engine with Compose v2), then:
 
 ```sh
-cp .env.example .env    # then set SESSION_SECRET to 32+ random characters
+cp .env.example .env    # then set SESSION_SECRET and CREDENTIALS_KEY (see the comments in the file)
 docker compose up -d --build
 ```
 
@@ -49,7 +66,7 @@ Requires Node.js 22.12 or newer.
 ```sh
 docker compose up -d db          # PostgreSQL only
 cd server
-cp .env.example .env             # then set SESSION_SECRET
+cp .env.example .env             # then set SESSION_SECRET and CREDENTIALS_KEY
 npm install                      # also generates the Prisma client
 npm run db:deploy                # apply migrations
 npm run dev                      # API on http://localhost:8000, restarts on save
@@ -71,7 +88,8 @@ CI (`.github/workflows/ci.yml`) runs the server checks against a PostgreSQL serv
 | Path | Purpose |
 | --- | --- |
 | `server/` | Node.js REST API: Express routes, Prisma schema and migrations, tests |
-| `frontend/` | React and TypeScript interface, served by nginx in Compose |
+| `frontend/src/app/` | The React interface: `router.tsx` (routes and guards), `pages/`, shared `ui.tsx`, `queries.ts` (React Query hooks), `app.css` (design tokens, light and dark) |
+| `frontend/src/` (other files) | The previous interface, kept until week 3 as a reference; not loaded |
 | `docs/cs409/` | Rewrite plan and course deliverables |
 | `legacy/` | The original Python backend, gateway and deployment files, kept as a porting reference |
 

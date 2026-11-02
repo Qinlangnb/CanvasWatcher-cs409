@@ -14,9 +14,11 @@ CanvasWatcher 从 Canvas 和受支持的课程网站汇集资料、截止日期�
 
 | 部分 | 状态 |
 | --- | --- |
-| 账号与会话（`/api/users`、`/api/sessions`） | 已完成，有测试 |
-| 课程、作业、任务、Canvas 同步 | 未开始，仍在 `legacy/backend` |
-| 前端 | 沿用原 React 应用，页面仍调用旧 API 路径 |
+| 账号与会话 | 已完成（第 1 周），有测试 |
+| Canvas 连接、手动与定时同步 | 已完成（第 2 周），用假的 Canvas 服务器测试 |
+| 课程、任务、文件、变动（只读、标记已读、归档） | 已完成（第 2 周） |
+| 前端 | 在 `frontend/src/app` 用 React Router 重写：登录、注册、引导、首页、课程、变动、文件、设置 |
+| Today、Timeline、日历、任务编辑 | 第 3 周；`frontend/src` 中的旧界面已不再加载，届时删除 |
 
 ### 已有 API
 
@@ -28,6 +30,21 @@ CanvasWatcher 从 Canvas 和受支持的课程网站汇集资料、截止日期�
 | `PUT /api/users/me/password` | 修改密码，并登出其他设备 | 204 |
 | `POST /api/sessions` | 用用户名或邮箱登录 | 201 |
 | `DELETE /api/sessions/current` | 登出当前浏览器 | 204 |
+| `GET /api/canvas/connection` | Canvas 站点、账号、状态与上次同步时间 | 200 |
+| `PUT /api/canvas/connection` | 验证 Canvas access token，加密保存，开始首次同步 | 200 |
+| `DELETE /api/canvas/connection` | 删除 token 与所有已同步数据 | 204 |
+| `POST /api/sync` | 开始同步；按 `Location` 轮询进度 | 202 |
+| `GET /api/sync/runs/latest`、`GET /api/sync/runs/{id}` | 同步进度与结果 | 200 |
+| `GET /api/courses[?archived=true]` | 当前（或仅已归档）课程及计数 | 200 |
+| `GET /api/courses/{id}`、`PATCH /api/courses/{id}` | 单门课程；归档或恢复 | 200 |
+| `GET /api/tasks[?course_id=&status=all]` | 未完成（或全部）任务，按截止时间排序，无截止的排最后 | 200 |
+| `GET /api/files[?course_id=&q=]` | 文件元数据，最新在前 | 200 |
+| `GET /api/files/{id}/download` | 302 跳转到 Canvas 新生成的下载链接 | 302 |
+| `GET /api/changes[?course_id=&unread=&limit=&before=]` | 变动列表，最新在前，游标分页 | 200 |
+| `GET /api/changes/unread-count`、`POST /api/changes/mark-all-read` | 未读数；全部（或某门课）标为已读 | 200 |
+| `GET /api/changes/{id}`、`PATCH /api/changes/{id}` | 单条变动及前后值；设置 `read` | 200 |
+
+默认只允许连接 `canvas.illinois.edu` 与 `*.instructure.com`（`CANVAS_ALLOWED_HOSTS`）。连接期间每个账号每 `SYNC_INTERVAL_MINUTES`（默认 30）分钟自动同步一次；Canvas 拒绝 token 后停止自动同步，直到用户重新连接。
 
 错误统一为 JSON：`{ "detail": "<给用户看的句子>", "code": "<机器码>" }`；校验错误返回 422，`detail` 为 `{ loc, msg }` 列表。会话使用 httpOnly Cookie；修改状态的请求必须带允许的 `Origin`，登录后还需带 `X-AW-CSRF` 头（取自 `aw_csrf` Cookie）。
 
@@ -36,7 +53,7 @@ CanvasWatcher 从 Canvas 和受支持的课程网站汇集资料、截止日期�
 安装 Docker Desktop（或 Docker Engine 与 Compose v2）后运行：
 
 ```sh
-cp .env.example .env    # 再把 SESSION_SECRET 设为 32 位以上随机字符
+cp .env.example .env    # 再设置 SESSION_SECRET 与 CREDENTIALS_KEY（见文件内注释）
 docker compose up -d --build
 ```
 
@@ -49,7 +66,7 @@ docker compose up -d --build
 ```sh
 docker compose up -d db          # 只启动 PostgreSQL
 cd server
-cp .env.example .env             # 再设置 SESSION_SECRET
+cp .env.example .env             # 再设置 SESSION_SECRET 与 CREDENTIALS_KEY
 npm install                      # 同时生成 Prisma Client
 npm run db:deploy                # 应用迁移
 npm run dev                      # API 运行在 http://localhost:8000，保存即重启
@@ -71,7 +88,8 @@ CI（`.github/workflows/ci.yml`）会在 PostgreSQL 服务上运行后端检查�
 | 路径 | 用途 |
 | --- | --- |
 | `server/` | Node.js REST API：Express 路由、Prisma 数据模型与迁移、测试 |
-| `frontend/` | React、TypeScript 界面，Compose 中由 nginx 提供 |
+| `frontend/src/app/` | React 界面：`router.tsx`（路由与登录守卫）、`pages/`、公共组件 `ui.tsx`、`queries.ts`（React Query hooks）、`app.css`（设计 token，深浅色） |
+| `frontend/src/`（其余文件） | 旧界面，保留到第 3 周作参考，已不再加载 |
 | `docs/cs409/` | 重写方案与课程交付文档 |
 | `legacy/` | 原 Python 后端、网关与部署文件，仅作移植对照 |
 

@@ -3,20 +3,28 @@ import express, { type Express } from "express";
 import helmet from "helmet";
 import type { Logger } from "pino";
 import { pinoHttp } from "pino-http";
-import { csrfGuard, loadSession, originGuard } from "./auth/middleware.js";
+import { csrfGuard, loadSession, originGuard, requireUser } from "./auth/middleware.js";
 import type { Config } from "./config.js";
 import type { Db } from "./db.js";
 import { errorHandler, notFound } from "./http/errors.js";
+import { canvasRouter } from "./routes/canvas.js";
+import { changesRouter } from "./routes/changes.js";
+import { coursesRouter } from "./routes/courses.js";
+import { filesRouter } from "./routes/files.js";
 import { sessionsRouter } from "./routes/sessions.js";
+import { syncRouter } from "./routes/sync.js";
+import { tasksRouter } from "./routes/tasks.js";
 import { usersRouter } from "./routes/users.js";
+import type { Services } from "./services.js";
 
 export interface AppDependencies {
   config: Config;
   db: Db;
   logger: Logger;
+  services: Services;
 }
 
-export function createApp({ config, db, logger }: AppDependencies): Express {
+export function createApp({ config, db, logger, services }: AppDependencies): Express {
   const app = express();
   app.set("trust proxy", config.trustProxy);
   app.use(helmet());
@@ -41,6 +49,13 @@ export function createApp({ config, db, logger }: AppDependencies): Express {
   app.use("/api", originGuard(config), loadSession(db), csrfGuard(config));
   app.use("/api/users", usersRouter(db, config));
   app.use("/api/sessions", sessionsRouter(db, config));
+  // Everything below belongs to the signed-in user and is always queried with their id.
+  app.use("/api/canvas", requireUser, canvasRouter(db, config, services));
+  app.use("/api/sync", requireUser, syncRouter(db, services));
+  app.use("/api/courses", requireUser, coursesRouter(db));
+  app.use("/api/tasks", requireUser, tasksRouter(db));
+  app.use("/api/files", requireUser, filesRouter(db, services));
+  app.use("/api/changes", requireUser, changesRouter(db));
   app.use("/api", notFound);
   app.use(errorHandler(logger));
   return app;

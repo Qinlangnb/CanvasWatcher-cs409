@@ -1,5 +1,5 @@
 # Local stack: PostgreSQL, the Node API and the built frontend.
-#   cp .env.example .env   (then set SESSION_SECRET)
+#   cp .env.example .env   (then set SESSION_SECRET and CREDENTIALS_KEY)
 #   docker compose up -d --build
 # For development, `docker compose up -d db` starts only the database (see README.md, "Develop").
 services:
@@ -27,6 +27,8 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgresql://canvaswatcher:${POSTGRES_PASSWORD:-canvaswatcher}@db:5432/canvaswatcher
       SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET in .env}
+      CREDENTIALS_KEY: ${CREDENTIALS_KEY:?Set CREDENTIALS_KEY in .env}
+      CANVAS_ALLOWED_HOSTS: ${CANVAS_ALLOWED_HOSTS:-canvas.illinois.edu,*.instructure.com}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080}
       # Only nginx (the frontend service) can reach the API, so trust exactly one proxy hop.
       TRUST_PROXY: "1"

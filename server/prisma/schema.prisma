@@ -14,17 +14,24 @@ datasource db {
 }
 
 model User {
-  id           String    @id @default(uuid()) @db.Uuid
+  id           String            @id @default(uuid()) @db.Uuid
   /// Display form, as the user typed it.
   username     String
   /// Lower-cased username; makes sign-in and uniqueness case-insensitive.
-  usernameKey  String    @unique @map("username_key")
+  usernameKey  String            @unique @map("username_key")
   /// Stored lower-cased.
-  email        String    @unique
-  passwordHash String    @map("password_hash")
-  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  email        String            @unique
+  passwordHash String            @map("password_hash")
+  createdAt    DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
   sessions     Session[]
+  canvas       CanvasConnection?
+  syncRuns     SyncRun[]
+  courses      Course[]
+  tasks        Task[]
+  files        CourseFile[]
+  sourceItems  SourceItem[]
+  changes      ChangeEvent[]
 
   @@map("users")
 }
@@ -52,4 +59,209 @@ model LoginAttempt {
   count       Int
 
   @@map("login_attempts")
+}
+
+enum ConnectionStatus {
+  /// The last request with this token succeeded.
+  OK
+  /// Canvas answered 401: the token was revoked or has expired.
+  TOKEN_REJECTED
+
+  @@map("connection_status")
+}
+
+/// One Canvas account per user.
+model CanvasConnection {
+  userId          String           @id @map("user_id") @db.Uuid
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Origin only, for example https://canvas.illinois.edu.
+  baseUrl         String           @map("base_url")
+  /// Personal access token sealed with CREDENTIALS_KEY (AES-256-GCM, bound to user_id).
+  tokenCiphertext String           @map("token_ciphertext")
+  canvasUserId    String           @map("canvas_user_id")
+  displayName     String           @map("display_name")
+  status          ConnectionStatus @default(OK)
+  verifiedAt      DateTime         @map("verified_at") @db.Timestamptz(3)
+  /// A sync holds this lease while it runs, so one user never has two syncs at once.
+  syncLeaseUntil  DateTime?        @map("sync_lease_until") @db.Timestamptz(3)
+  lastSyncedAt    DateTime?        @map("last_synced_at") @db.Timestamptz(3)
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([lastSyncedAt])
+  @@map("canvas_connections")
+}
+
+enum SyncTrigger {
+  CONNECT
+  MANUAL
+  SCHEDULED
+
+  @@map("sync_trigger")
+}
+
+enum SyncStatus {
+  RUNNING
+  SUCCEEDED
+  /// Finished, but some courses or resources could not be read.
+  PARTIAL
+  FAILED
+
+  @@map("sync_status")
+}
+
+model SyncRun {
+  id              String      @id @default(uuid()) @db.Uuid
+  userId          String      @map("user_id") @db.Uuid
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  trigger         SyncTrigger
+  status          SyncStatus  @default(RUNNING)
+  startedAt       DateTime    @default(now()) @map("started_at") @db.Timestamptz(3)
+  finishedAt      DateTime?   @map("finished_at") @db.Timestamptz(3)
+  coursesSynced   Int         @default(0) @map("courses_synced")
+  changesDetected Int         @default(0) @map("changes_detected")
+  /// Short, user-facing explanation when the status is PARTIAL or FAILED.
+  error           String?
+
+  @@index([userId, startedAt])
+  @@map("sync_runs")
+}
+
+model Course {
+  id          Int           @id @default(autoincrement())
+  userId      String        @map("user_id") @db.Uuid
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  canvasId    String        @map("canvas_id")
+  courseCode  String        @map("course_code")
+  name        String
+  termName    String?       @map("term_name")
+  termStartAt DateTime?     @map("term_start_at") @db.Timestamptz(3)
+  termEndAt   DateTime?     @map("term_end_at") @db.Timestamptz(3)
+  htmlUrl     String        @map("html_url")
+  /// Set when the user hides the course; sync keeps updating it.
+  archivedAt  DateTime?     @map("archived_at") @db.Timestamptz(3)
+  /// The last sync that saw this course among the user's active enrollments.
+  lastSeenAt  DateTime      @map("last_seen_at") @db.Timestamptz(3)
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  tasks       Task[]
+  files       CourseFile[]
+  sourceItems SourceItem[]
+  changes     ChangeEvent[]
+
+  @@unique([userId, canvasId])
+  @@index([userId, archivedAt])
+  @@map("courses")
+}
+
+/// A Canvas assignment, plus the student's own progress on it.
+model Task {
+  id              Int       @id @default(autoincrement())
+  userId          String    @map("user_id") @db.Uuid
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId        Int       @map("course_id")
+  course          Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  canvasId        String    @map("canvas_id")
+  title           String
+  /// assignment, homework, exam, project or reading, guessed from the title and group.
+  taskType        String    @map("task_type")
+  dueAt           DateTime? @map("due_at") @db.Timestamptz(3)
+  pointsPossible  Float?    @map("points_possible")
+  htmlUrl         String?   @map("html_url")
+  /// Canvas workflow_state of the submission: unsubmitted, submitted, graded or pending_review.
+  submissionState String?   @map("submission_state")
+  submittedAt     DateTime? @map("submitted_at") @db.Timestamptz(3)
+  completedAt     DateTime? @map("completed_at") @db.Timestamptz(3)
+  ignoredAt       DateTime? @map("ignored_at") @db.Timestamptz(3)
+  /// Set when the assignment disappears from Canvas.
+  removedAt       DateTime? @map("removed_at") @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([courseId, canvasId])
+  @@index([userId, dueAt])
+  @@map("tasks")
+}
+
+/// Metadata of a Canvas course file. Contents are fetched from Canvas when downloaded.
+model CourseFile {
+  id              Int       @id @default(autoincrement())
+  userId          String    @map("user_id") @db.Uuid
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId        Int       @map("course_id")
+  course          Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  canvasId        String    @map("canvas_id")
+  displayName     String    @map("display_name")
+  contentType     String?   @map("content_type")
+  sizeBytes       Int       @map("size_bytes")
+  canvasUpdatedAt DateTime? @map("canvas_updated_at") @db.Timestamptz(3)
+  removedAt       DateTime? @map("removed_at") @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([courseId, canvasId])
+  @@index([userId, courseId])
+  @@map("files")
+}
+
+enum ItemKind {
+  ASSIGNMENT
+  FILE
+  ANNOUNCEMENT
+
+  @@map("item_kind")
+}
+
+/// The last-seen version of every tracked Canvas item, used to detect changes.
+model SourceItem {
+  id          Int           @id @default(autoincrement())
+  userId      String        @map("user_id") @db.Uuid
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId    Int           @map("course_id")
+  course      Course        @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  kind        ItemKind
+  canvasId    String        @map("canvas_id")
+  title       String
+  htmlUrl     String?       @map("html_url")
+  /// SHA-256 of `content`; unchanged items are skipped without comparing fields.
+  contentHash String        @map("content_hash")
+  /// The fields compared between syncs, for example title, due date and description.
+  content     Json
+  firstSeenAt DateTime      @default(now()) @map("first_seen_at") @db.Timestamptz(3)
+  removedAt   DateTime?     @map("removed_at") @db.Timestamptz(3)
+  changes     ChangeEvent[]
+
+  @@unique([courseId, kind, canvasId])
+  @@map("source_items")
+}
+
+enum ChangeType {
+  CREATED
+  UPDATED
+  REMOVED
+
+  @@map("change_type")
+}
+
+model ChangeEvent {
+  id           Int        @id @default(autoincrement())
+  userId       String     @map("user_id") @db.Uuid
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId     Int        @map("course_id")
+  course       Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  sourceItemId Int        @map("source_item_id")
+  sourceItem   SourceItem @relation(fields: [sourceItemId], references: [id], onDelete: Cascade)
+  changeType   ChangeType @map("change_type")
+  /// Names of the content fields that differ, for example ["due_at"].
+  fields       String[]
+  summary      String
+  before       Json?
+  after        Json?
+  detectedAt   DateTime   @default(now()) @map("detected_at") @db.Timestamptz(3)
+  readAt       DateTime?  @map("read_at") @db.Timestamptz(3)
+
+  @@index([userId, detectedAt])
+  @@index([userId, readAt])
+  @@index([courseId, detectedAt])
+  @@map("change_events")
 }
