@@ -1,5 +1,7 @@
 # CanvasWatcher / Academic Watcher
 
+> **CS409 fork。** 本仓库是 [CanvasWatcher](https://github.com/Qinlangnb/CanvasWatcher) 的课程项目分支，后端正在改写为 JavaScript（Node.js）；下文的 Python 服务在重写达到同等功能前仅作移植对照。详见[重写方案](docs/cs409/REWRITE_PLAN.zh-CN.md)。
+
 [English README](README.md) · [本地部署说明](DEPLOYMENT.md) · [多用户预览部署](DEPLOYMENT_MULTIUSER.zh-CN.md) · [GPL-2.0](LICENSE)
 
 CanvasWatcher 从 Canvas 和受支持的课程网站汇集资料、截止日期、任务与有意义的变更，提供 Today 规划、文件历史、日历导入和可选 AI 辅助。来源同步只读；AI 写入操作需要明确确认。

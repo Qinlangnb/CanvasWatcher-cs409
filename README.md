@@ -1,5 +1,7 @@
 # CanvasWatcher / Academic Watcher
 
+> **CS409 fork.** This repository is the course-project fork of [CanvasWatcher](https://github.com/Qinlangnb/CanvasWatcher). Its backend is being rewritten in JavaScript (Node.js); the Python services below remain only as a porting reference until the rewrite reaches parity. See the [rewrite plan](docs/cs409/REWRITE_PLAN.zh-CN.md).
+
 [中文说明](README.zh-CN.md) · [Local deployment](DEPLOYMENT.md) · [Multi-user preview](DEPLOYMENT_MULTIUSER.md) · [GPL-2.0](LICENSE)
 
 CanvasWatcher collects course materials, deadlines, tasks, and meaningful changes from Canvas and supported course sites. It offers a Today planner, file history, calendar imports, and optional AI assistance. Source synchronization is read-only; AI write actions require explicit confirmation.
