@@ -153,7 +153,7 @@ test("public, onboarding and signed-in routes are wired with their guards", () =
   assert.match(router, /path: "\/signin", element: <PublicOnly><SignInPage \/><\/PublicOnly>/);
   assert.match(router, /path: "\/signup", element: <PublicOnly><SignUpPage \/><\/PublicOnly>/);
   assert.match(router, /element: <RequireAuth \/>,\s*children: \[\s*\{ path: "\/welcome", element: <WelcomePage \/> \}/);
-  for (const path of ['index: true', 'path: "courses"', 'path: "courses/:courseId"', 'path: "changes"', 'path: "files"', 'path: "settings"', 'path: "*"']) {
+  for (const path of ['index: true', 'path: "calendar"', 'path: "courses"', 'path: "courses/:courseId"', 'path: "changes"', 'path: "files"', 'path: "settings"', 'path: "*"']) {
     assert.ok(router.includes(path), path);
   }
   assert.match(router, /errorElement: <RouteErrorPage \/>/);

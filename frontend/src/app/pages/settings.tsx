@@ -1,13 +1,27 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { useLocation } from "react-router";
+import { Link, useLocation } from "react-router";
 import { ApiError } from "../api";
 import { ConnectCanvasForm } from "../canvas";
-import { formatDateTime, timeAgo } from "../format";
-import { SyncIcon } from "../icons";
-import { useChangePassword, useConnection, useDisconnectCanvas, useMe, useSignOut, useSync } from "../queries";
+import { ImportCalendarDialog } from "../events";
+import { formatDateTime, formatMinuteOfDay, formatMinutes, plural, timeAgo } from "../format";
+import { SyncIcon, UploadIcon } from "../icons";
+import {
+  browserTimeZone,
+  useCalendarSources,
+  useChangePassword,
+  useConnection,
+  useDeleteCalendarSource,
+  useDisconnectCanvas,
+  useMe,
+  useSettings,
+  useSignOut,
+  useSync,
+  useUpdateSettings,
+} from "../queries";
 import { useNow } from "../shell";
 import { useToast } from "../toast";
-import { Alert, Badge, Dialog, PageHeader, PasswordField, Spinner } from "../ui";
+import type { CalendarSource, PlanSettings } from "../types";
+import { Alert, Badge, Dialog, PageHeader, PasswordField, QueryError, SelectField, SkeletonList, Spinner } from "../ui";
 
 function ProfileSection() {
   const me = useMe();
@@ -162,6 +176,230 @@ function CanvasSection() {
   );
 }
 
+const GOAL_CHOICES = [30, 45, 60, 90, 120, 150, 180, 210, 240, 300, 360, 420, 480, 600];
+
+/** Every half hour, plus `current` when it's off the grid (set through the API). */
+function halfHours(from: number, to: number, current: number): number[] {
+  const values = new Set<number>([current]);
+  for (let minute = from; minute <= to; minute += 30) values.add(minute);
+  return [...values].sort((a, b) => a - b);
+}
+
+function zoneNames(current: string): string[] {
+  let names: string[] = [];
+  try {
+    names = (Intl as unknown as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf?.("timeZone") ?? [];
+  } catch {
+    names = [];
+  }
+  const device = browserTimeZone();
+  return [...new Set([current, ...(device ? [device] : []), ...names])].sort();
+}
+
+function StudyPlanForm({ settings }: { settings: PlanSettings }) {
+  const update = useUpdateSettings();
+  const toast = useToast();
+  const [draft, setDraft] = useState(settings);
+  const device = browserTimeZone();
+  const dirty = JSON.stringify(draft) !== JSON.stringify(settings);
+  const fields = update.error instanceof ApiError ? update.error.fields : {};
+  const general = update.error && Object.keys(fields).length === 0 ? update.error.message : null;
+  const tooShort = draft.study_end_minute - draft.study_start_minute < 15;
+  const set = <K extends keyof PlanSettings>(key: K, value: PlanSettings[K]) => setDraft((current) => ({ ...current, [key]: value }));
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    if (tooShort) return;
+    const changes: Partial<PlanSettings> = {};
+    for (const key of Object.keys(draft) as (keyof PlanSettings)[]) {
+      if (draft[key] !== settings[key]) Object.assign(changes, { [key]: draft[key] });
+    }
+    update.mutate(changes, { onSuccess: () => toast("Study plan saved. Today's plan is updated.") });
+  };
+
+  return (
+    <form className="stack" onSubmit={submit} noValidate>
+      {general ? <Alert>{general}</Alert> : null}
+      <SelectField
+        label="Time zone"
+        value={draft.time_zone}
+        onChange={(event) => set("time_zone", event.target.value)}
+        error={fields.time_zone}
+        hint="Days, due dates and your study window follow this zone."
+      >
+        {zoneNames(draft.time_zone).map((zone) => (
+          <option key={zone} value={zone}>
+            {zone.replaceAll("_", " ")}
+          </option>
+        ))}
+      </SelectField>
+      {device && device !== draft.time_zone ? (
+        <p className="inline-note">
+          This device is set to {device.replaceAll("_", " ")}.{" "}
+          <button type="button" className="link-button" onClick={() => set("time_zone", device)}>
+            Use it
+          </button>
+        </p>
+      ) : null}
+      <SelectField
+        label="Daily study goal"
+        value={draft.daily_study_minutes}
+        onChange={(event) => set("daily_study_minutes", Number(event.target.value))}
+        error={fields.daily_study_minutes}
+        hint="The most Today's plan asks of you in one day."
+      >
+        {[...new Set([...GOAL_CHOICES, draft.daily_study_minutes])]
+          .sort((a, b) => a - b)
+          .map((minutes) => (
+            <option key={minutes} value={minutes}>
+              {formatMinutes(minutes)}
+            </option>
+          ))}
+      </SelectField>
+      <div className="form-row">
+        <SelectField
+          label="Study from"
+          value={draft.study_start_minute}
+          onChange={(event) => set("study_start_minute", Number(event.target.value))}
+          error={fields.study_start_minute}
+        >
+          {halfHours(0, 1410, draft.study_start_minute).map((minute) => (
+            <option key={minute} value={minute}>
+              {formatMinuteOfDay(minute)}
+            </option>
+          ))}
+        </SelectField>
+        <SelectField
+          label="Until"
+          value={draft.study_end_minute}
+          onChange={(event) => set("study_end_minute", Number(event.target.value))}
+          error={tooShort ? "End your study window at least 15 minutes after it starts." : fields.study_end_minute}
+        >
+          {halfHours(30, 1440, draft.study_end_minute).map((minute) => (
+            <option key={minute} value={minute}>
+              {formatMinuteOfDay(minute)}
+            </option>
+          ))}
+        </SelectField>
+      </div>
+      <p className="muted">
+        The plan only uses free time inside this window. Busy events from your <Link to="/calendar">calendar</Link> don't count as free.
+      </p>
+      <div className="form-actions">
+        <button type="submit" className="button primary" disabled={!dirty || update.isPending || tooShort}>
+          {update.isPending ? <Spinner size={16} /> : null}
+          Save study plan
+        </button>
+        {dirty ? (
+          <button type="button" className="button ghost" onClick={() => setDraft(settings)} disabled={update.isPending}>
+            Undo changes
+          </button>
+        ) : null}
+      </div>
+    </form>
+  );
+}
+
+function StudyPlanSection() {
+  const settings = useSettings();
+  return (
+    <section className="card settings-section" id="study-plan" aria-labelledby="study-plan-heading">
+      <h2 id="study-plan-heading">Study plan</h2>
+      {settings.isPending ? <SkeletonList rows={3} label="Loading your study plan" /> : null}
+      {settings.isError ? <QueryError error={settings.error} retry={() => void settings.refetch()} /> : null}
+      {/* A fresh form whenever the saved settings change. */}
+      {settings.data ? <StudyPlanForm key={JSON.stringify(settings.data)} settings={settings.data} /> : null}
+    </section>
+  );
+}
+
+function CalendarsSection() {
+  const sources = useCalendarSources();
+  const remove = useDeleteCalendarSource();
+  const toast = useToast();
+  const now = useNow();
+  const [importing, setImporting] = useState(false);
+  const [removing, setRemoving] = useState<CalendarSource | null>(null);
+
+  return (
+    <section className="card settings-section" id="calendars" aria-labelledby="calendars-heading">
+      <h2 id="calendars-heading">Calendars</h2>
+      <p className="muted">
+        Imported .ics files. To update one, remove it and import a new export. Events you add by hand live on the{" "}
+        <Link to="/calendar">Calendar</Link> page.
+      </p>
+      {sources.isPending ? <SkeletonList rows={2} label="Loading calendars" /> : null}
+      {sources.isError ? <QueryError error={sources.error} retry={() => void sources.refetch()} /> : null}
+      {sources.data?.length === 0 ? <p className="inline-note">No calendars imported yet.</p> : null}
+      {sources.data && sources.data.length > 0 ? (
+        <ul className="source-list">
+          {sources.data.map((source) => (
+            <li key={source.id}>
+              <div className="source-text">
+                <p className="source-name">{source.name}</p>
+                <p className="muted">
+                  {plural(source.event_count, "event")} · imported{" "}
+                  <time dateTime={source.imported_at} title={formatDateTime(source.imported_at)}>
+                    {timeAgo(source.imported_at, now)}
+                  </time>
+                  {source.file_name ? ` from ${source.file_name}` : ""}
+                </p>
+              </div>
+              <button type="button" className="button small danger-ghost" onClick={() => setRemoving(source)}>
+                Remove<span className="visually-hidden"> {source.name}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <div className="form-actions">
+        <button type="button" className="button secondary" onClick={() => setImporting(true)}>
+          <UploadIcon size={18} />
+          Import .ics
+        </button>
+      </div>
+
+      <ImportCalendarDialog open={importing} onClose={() => setImporting(false)} />
+      <Dialog
+        open={removing !== null}
+        onClose={() => setRemoving(null)}
+        title={`Remove “${removing?.name ?? ""}”?`}
+        size="small"
+        footer={
+          <>
+            <button type="button" className="button ghost" onClick={() => setRemoving(null)}>
+              Keep it
+            </button>
+            <button
+              type="button"
+              className="button danger"
+              disabled={remove.isPending}
+              onClick={() =>
+                removing &&
+                remove.mutate(removing.id, {
+                  onSuccess: () => {
+                    toast(`Removed ${removing.name}.`);
+                    setRemoving(null);
+                  },
+                  onError: (error) => toast(error.message, "error"),
+                })
+              }
+            >
+              {remove.isPending ? <Spinner size={16} /> : null}
+              Remove calendar
+            </button>
+          </>
+        }
+      >
+        <p>
+          Its {plural(removing?.event_count ?? 0, "event")} leave your calendar and stop taking time from your plan. Events you added by hand
+          stay.
+        </p>
+      </Dialog>
+    </section>
+  );
+}
+
 function PasswordSection() {
   const change = useChangePassword();
   const toast = useToast();
@@ -237,10 +475,17 @@ function PasswordSection() {
 }
 
 export function SettingsPage() {
+  const location = useLocation();
+  useEffect(() => {
+    // #canvas is handled by its section, which may first open the token form.
+    if (location.hash && location.hash !== "#canvas") document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: "start" });
+  }, [location.hash]);
   return (
     <div className="page">
-      <PageHeader title="Settings" description="Your account and the Canvas connection." />
+      <PageHeader title="Settings" description="Your study plan, calendars, account and the Canvas connection." />
       <div className="settings-grid">
+        <StudyPlanSection />
+        <CalendarsSection />
         <CanvasSection />
         <ProfileSection />
         <PasswordSection />

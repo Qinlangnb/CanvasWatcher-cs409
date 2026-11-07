@@ -9,6 +9,7 @@ import type {
   SyncRun,
   Task,
 } from "../generated/prisma/client.js";
+import { remainingMinutes, totalMinutes } from "../tasks/effort.js";
 
 const iso = (date: Date | null) => (date ? date.toISOString() : null);
 const lower = <T extends string>(value: T) => value.toLowerCase() as Lowercase<T>;
@@ -86,10 +87,15 @@ export function taskState(task: Task, now = new Date()): TaskState {
   return task.dueAt && task.dueAt < now ? "overdue" : "open";
 }
 
-export function presentTask(task: Task & { course: CourseSummary }, now = new Date()) {
+export type TaskWithCourse = Task & { course: CourseSummary };
+export const taskInclude = { course: { select: courseSummarySelect } } satisfies Prisma.TaskInclude;
+
+export function presentTask(task: TaskWithCourse, now = new Date()) {
+  const state = taskState(task, now);
   return {
     id: task.id,
     course: presentCourseSummary(task.course),
+    source: lower(task.source),
     title: task.title,
     type: task.taskType,
     due_at: iso(task.dueAt),
@@ -98,7 +104,14 @@ export function presentTask(task: Task & { course: CourseSummary }, now = new Da
     submission_state: task.submissionState,
     submitted_at: iso(task.submittedAt),
     completed_at: iso(task.completedAt),
-    state: taskState(task, now),
+    ignored_at: iso(task.ignoredAt),
+    state,
+    progress: task.progress,
+    /** The student's estimate, or null while the type's default is used. */
+    estimated_minutes: task.estimatedMinutes,
+    total_minutes: totalMinutes(task),
+    remaining_minutes: state === "done" ? 0 : remainingMinutes(task),
+    notes: task.notes,
   };
 }
 

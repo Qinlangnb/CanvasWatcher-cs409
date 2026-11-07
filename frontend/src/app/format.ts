@@ -2,46 +2,76 @@
 
 const DAY = 24 * 60 * 60_000;
 
-// The interface is written in English, so dates are too; times still use the browser's time zone.
+// The interface is written in English, so dates are too. Times use the student's planning time zone
+// where a function takes `zone`, and the browser's otherwise.
 const LOCALE = "en-US";
-const time = new Intl.DateTimeFormat(LOCALE, { hour: "numeric", minute: "2-digit" });
-const weekdayDate = new Intl.DateTimeFormat(LOCALE, { weekday: "short", month: "short", day: "numeric" });
 const longDate = new Intl.DateTimeFormat(LOCALE, { weekday: "long", month: "long", day: "numeric" });
 const shortDate = new Intl.DateTimeFormat(LOCALE, { month: "short", day: "numeric" });
 const fullDate = new Intl.DateTimeFormat(LOCALE, { month: "short", day: "numeric", year: "numeric" });
 const dateTime = new Intl.DateTimeFormat(LOCALE, { dateStyle: "medium", timeStyle: "short" });
 const relative = new Intl.RelativeTimeFormat(LOCALE, { numeric: "auto" });
 
-function startOfDay(date: Date): number {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+const formatters = new Map<string, Intl.DateTimeFormat>();
+/** A cached formatter for `options` in `zone` (the browser's zone when undefined). */
+function formatter(options: Intl.DateTimeFormatOptions, zone?: string, locale = LOCALE): Intl.DateTimeFormat {
+  const key = `${locale}|${zone ?? ""}|${JSON.stringify(options)}`;
+  let cached = formatters.get(key);
+  if (!cached) {
+    cached = new Intl.DateTimeFormat(locale, { ...options, timeZone: zone });
+    formatters.set(key, cached);
+  }
+  return cached;
 }
 
-/** Whole calendar days from today to `date` in local time: 0 today, 1 tomorrow, -1 yesterday. */
-export function dayOffset(date: Date, now = new Date()): number {
-  return Math.round((startOfDay(date) - startOfDay(now)) / DAY);
+/** "2026-11-06": the calendar date of `date` in `zone`. */
+export function dayKey(date: Date, zone?: string): string {
+  const parts = formatter({ year: "numeric", month: "2-digit", day: "2-digit" }, zone, "en-CA").formatToParts(date);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
+
+/** Whole calendar days from today to `date` in `zone`: 0 today, 1 tomorrow, -1 yesterday. */
+export function dayOffset(date: Date, now = new Date(), zone?: string): number {
+  return Math.round((Date.parse(dayKey(date, zone)) - Date.parse(dayKey(now, zone))) / DAY);
+}
+
+/** The hour (0-23) of `date` in `zone`. */
+export function hourOf(date: Date, zone?: string): number {
+  return Number(formatter({ hour: "numeric", hourCycle: "h23" }, zone).format(date)) % 24;
+}
+
+/** "9:00 AM" in `zone`. */
+export function formatTime(date: Date, zone?: string): string {
+  return formatter({ hour: "numeric", minute: "2-digit" }, zone).format(date);
 }
 
 /** "Today, 11:59 PM", "Tomorrow, 9:00 AM", "Fri, Nov 7, 11:59 PM" or "No due date". */
-export function formatDue(iso: string | null, now = new Date()): string {
+export function formatDue(iso: string | null, now = new Date(), zone?: string): string {
   if (!iso) return "No due date";
   const date = new Date(iso);
-  const offset = dayOffset(date, now);
-  if (offset === 0) return `Today, ${time.format(date)}`;
-  if (offset === 1) return `Tomorrow, ${time.format(date)}`;
-  if (offset === -1) return `Yesterday, ${time.format(date)}`;
-  const day = date.getFullYear() === now.getFullYear() ? weekdayDate.format(date) : fullDate.format(date);
-  return `${day}, ${time.format(date)}`;
+  const offset = dayOffset(date, now, zone);
+  const at = formatTime(date, zone);
+  if (offset === 0) return `Today, ${at}`;
+  if (offset === 1) return `Tomorrow, ${at}`;
+  if (offset === -1) return `Yesterday, ${at}`;
+  const sameYear = dayKey(date, zone).slice(0, 4) === dayKey(now, zone).slice(0, 4);
+  const day = formatter(sameYear ? { weekday: "short", month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" }, zone);
+  return `${day.format(date)}, ${at}`;
 }
 
 /** Short urgency hint shown next to a due date. */
-export function dueHint(iso: string | null, now = new Date()): { label: string; tone: "danger" | "warning" | "neutral" } | null {
+export function dueHint(
+  iso: string | null,
+  now = new Date(),
+  zone?: string,
+): { label: string; tone: "danger" | "warning" | "neutral" } | null {
   if (!iso) return null;
   const date = new Date(iso);
   if (date < now) {
-    const days = -dayOffset(date, now);
+    const days = -dayOffset(date, now, zone);
     return { label: days <= 0 ? "Overdue" : `Overdue by ${days} day${days === 1 ? "" : "s"}`, tone: "danger" };
   }
-  const offset = dayOffset(date, now);
+  const offset = dayOffset(date, now, zone);
   if (offset === 0) return { label: "Due today", tone: "warning" };
   if (offset === 1) return { label: "Due tomorrow", tone: "warning" };
   if (offset < 7) return { label: `In ${offset} days`, tone: "neutral" };
@@ -61,8 +91,26 @@ export function timeAgo(iso: string | null, now = new Date()): string {
 }
 
 /** "Sunday, November 1". */
-export function formatLongDate(date: Date): string {
-  return longDate.format(date);
+export function formatLongDate(date: Date, zone?: string): string {
+  return zone ? formatter({ weekday: "long", month: "long", day: "numeric" }, zone).format(date) : longDate.format(date);
+}
+
+/** "45 min", "2 h", "2 h 30 min". */
+export function formatMinutes(minutes: number): string {
+  const total = Math.max(0, Math.round(minutes));
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  if (hours === 0) return `${rest} min`;
+  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
+}
+
+/** A minute after local midnight as a clock time: 540 is "9:00 AM", 1440 is "Midnight". */
+export function formatMinuteOfDay(minute: number): string {
+  if (minute === 0 || minute === 1440) return "Midnight";
+  if (minute === 720) return "Noon";
+  const hour = Math.floor(minute / 60);
+  const rest = String(minute % 60).padStart(2, "0");
+  return `${hour % 12 === 0 ? 12 : hour % 12}:${rest} ${hour < 12 ? "AM" : "PM"}`;
 }
 
 /** "Nov 1" this year, "Sep 2, 2025" otherwise. */
@@ -123,4 +171,14 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   exam: "Exam",
   project: "Project",
   reading: "Reading",
+  other: "Other",
 };
+
+/** Why the Today plan picked a task, as a short badge. */
+export const REASON_LABELS = {
+  overdue: { label: "Overdue", tone: "danger" },
+  due_today: { label: "Due today", tone: "warning" },
+  low_slack: { label: "Running out of time", tone: "warning" },
+  quick_finish: { label: "Quick finish", tone: "success" },
+  get_ahead: { label: "Get ahead", tone: "accent" },
+} as const;

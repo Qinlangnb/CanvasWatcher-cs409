@@ -7,13 +7,16 @@ import { csrfGuard, loadSession, originGuard, requireUser } from "./auth/middlew
 import type { Config } from "./config.js";
 import type { Db } from "./db.js";
 import { errorHandler, notFound } from "./http/errors.js";
+import { calendarRouter, isIcsUpload } from "./routes/calendar.js";
 import { canvasRouter } from "./routes/canvas.js";
 import { changesRouter } from "./routes/changes.js";
 import { coursesRouter } from "./routes/courses.js";
 import { filesRouter } from "./routes/files.js";
 import { sessionsRouter } from "./routes/sessions.js";
+import { settingsRouter } from "./routes/settings.js";
 import { syncRouter } from "./routes/sync.js";
 import { tasksRouter } from "./routes/tasks.js";
+import { todayRouter } from "./routes/today.js";
 import { usersRouter } from "./routes/users.js";
 import type { Services } from "./services.js";
 
@@ -29,7 +32,9 @@ export function createApp({ config, db, logger, services }: AppDependencies): Ex
   app.set("trust proxy", config.trustProxy);
   app.use(helmet());
   app.use(pinoHttp({ logger, redact: ["req.headers.cookie", "res.headers['set-cookie']"] }));
-  app.use(express.json({ limit: "100kb" }));
+  const json = express.json({ limit: "100kb" });
+  // Calendar imports carry a whole .ics file; that route parses its own body, after sign-in is checked.
+  app.use((req, res, next) => (isIcsUpload(req.method, req.path) ? next() : json(req, res, next)));
   app.use(cookieParser());
   app.use("/api", (_req, res, next) => {
     // Responses carry account data; never let a shared cache keep them.
@@ -56,6 +61,9 @@ export function createApp({ config, db, logger, services }: AppDependencies): Ex
   app.use("/api/tasks", requireUser, tasksRouter(db));
   app.use("/api/files", requireUser, filesRouter(db, services));
   app.use("/api/changes", requireUser, changesRouter(db));
+  app.use("/api/today", requireUser, todayRouter(db));
+  app.use("/api/calendar", requireUser, calendarRouter(db));
+  app.use("/api/settings", requireUser, settingsRouter(db));
   app.use("/api", notFound);
   app.use(errorHandler(logger));
   return app;

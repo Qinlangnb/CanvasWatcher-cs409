@@ -44,18 +44,50 @@ export interface Course extends CourseSummary {
 
 export type TaskState = "open" | "overdue" | "done" | "ignored" | "removed";
 
+export type TaskType = "assignment" | "homework" | "exam" | "project" | "reading" | "other";
+
 export interface Task {
   id: number;
   course: CourseSummary;
+  /** Canvas tasks are synced; personal ones were added by the student. */
+  source: "canvas" | "personal";
   title: string;
-  type: string;
+  type: TaskType | string;
   due_at: string | null;
   points_possible: number | null;
   html_url: string | null;
   submission_state: string | null;
   submitted_at: string | null;
   completed_at: string | null;
+  ignored_at: string | null;
   state: TaskState;
+  /** Percent done, 0-100. */
+  progress: number;
+  /** The student's own estimate; null while the type's default applies. */
+  estimated_minutes: number | null;
+  total_minutes: number;
+  remaining_minutes: number;
+  notes: string | null;
+}
+
+export interface TaskChanges {
+  done?: boolean;
+  ignored?: boolean;
+  progress?: number;
+  estimated_minutes?: number | null;
+  notes?: string | null;
+  title?: string;
+  type?: TaskType;
+  due_at?: string | null;
+}
+
+export interface NewTask {
+  course_id: number;
+  title: string;
+  type: TaskType;
+  due_at: string | null;
+  estimated_minutes: number | null;
+  notes: string | null;
 }
 
 export interface CourseFile {
@@ -94,4 +126,76 @@ export interface ChangeDetail extends Change {
 export interface ChangePage {
   items: Change[];
   next_before: number | null;
+}
+
+export interface PlanSettings {
+  /** IANA name, for example America/Chicago. */
+  time_zone: string;
+  daily_study_minutes: number;
+  /** Minutes after local midnight; the end may be 1440. */
+  study_start_minute: number;
+  study_end_minute: number;
+}
+
+export type TodayReason = "overdue" | "due_today" | "low_slack" | "quick_finish" | "get_ahead";
+
+export interface TodayItem {
+  task: Task;
+  score: number;
+  remaining_minutes: number;
+  /** Minutes of today's capacity for this task; 0 when it doesn't fit. */
+  planned_minutes: number;
+  slack_minutes: number | null;
+  reasons: TodayReason[];
+}
+
+export interface Today {
+  date: string;
+  time_zone: string;
+  study_window: { start: string; end: string };
+  goal_minutes: number;
+  free_minutes: number;
+  capacity_minutes: number;
+  planned_minutes: number;
+  due_today_minutes: number;
+  items: TodayItem[];
+  done_today: Task[];
+  events: CalendarEvent[];
+}
+
+export interface CalendarEvent {
+  id: number;
+  title: string;
+  location: string | null;
+  all_day: boolean;
+  /** "YYYY-MM-DD" for all-day events, otherwise an ISO instant. */
+  start: string;
+  /** Exclusive: the day after the last day, or when the event ends. */
+  end: string;
+  busy: boolean;
+  source: { id: number; name: string } | null;
+  /** Only events added by hand can be changed; imported ones follow their file. */
+  editable: boolean;
+}
+
+export interface EventFields {
+  title: string;
+  location: string | null;
+  all_day: boolean;
+  start: string;
+  end: string;
+  busy: boolean;
+}
+
+export interface CalendarSource {
+  id: number;
+  name: string;
+  file_name: string | null;
+  imported_at: string;
+  event_count: number;
+}
+
+export interface CalendarImport extends CalendarSource {
+  /** The file had more events than one import keeps. */
+  truncated: boolean;
 }

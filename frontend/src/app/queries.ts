@@ -2,16 +2,32 @@ import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { isApiError, request } from "./api";
 import type {
+  CalendarEvent,
+  CalendarImport,
+  CalendarSource,
   CanvasConnection,
   Change,
   ChangeDetail,
   ChangePage,
   Course,
   CourseFile,
+  EventFields,
+  NewTask,
+  PlanSettings,
   SyncRun,
   Task,
+  TaskChanges,
+  Today,
   User,
 } from "./types";
+
+export interface TaskQuery {
+  courseId?: number;
+  status: "open" | "all";
+  /** ISO instants; tasks due in [dueAfter, dueBefore). */
+  dueAfter?: string;
+  dueBefore?: string;
+}
 
 export const keys = {
   me: ["me"] as const,
@@ -19,7 +35,11 @@ export const keys = {
   latestRun: ["sync-run", "latest"] as const,
   courses: (archived: boolean) => ["courses", { archived }] as const,
   course: (id: number) => ["courses", id] as const,
-  tasks: (params: { courseId?: number; status: "open" | "all" }) => ["tasks", params] as const,
+  tasks: (params: TaskQuery) => ["tasks", params] as const,
+  today: ["today"] as const,
+  settings: ["settings"] as const,
+  events: (from: string, to: string) => ["events", { from, to }] as const,
+  sources: ["calendar-sources"] as const,
   files: (params: { courseId?: number; q?: string }) => ["files", params] as const,
   changes: (params: { courseId?: number; unread?: boolean }) => ["changes", "list", params] as const,
   change: (id: number) => ["changes", "detail", id] as const,
@@ -35,7 +55,7 @@ function query(path: string, params: Record<string, string | number | boolean | 
 
 /** Everything synced from Canvas; refreshed after a sync or a connection change. */
 export function invalidateCanvasData(client: QueryClient) {
-  for (const key of ["courses", "tasks", "files", "changes", "canvas-connection", "sync-run"]) {
+  for (const key of ["courses", "tasks", "today", "files", "changes", "canvas-connection", "sync-run"]) {
     void client.invalidateQueries({ queryKey: [key] });
   }
 }
@@ -77,10 +97,23 @@ export function useSignIn() {
 export function useSignUp() {
   const signedIn = useSignedIn();
   return useMutation({
-    mutationFn: (body: { username: string; email: string; password: string }) =>
-      request<User>("/api/users", { method: "POST", body }),
+    mutationFn: async (body: { username: string; email: string; password: string }) => {
+      const user = await request<User>("/api/users", { method: "POST", body });
+      // Plans and calendars are read in the student's own time zone; start from the browser's.
+      const zone = browserTimeZone();
+      if (zone) await request("/api/settings", { method: "PATCH", body: { time_zone: zone } }).catch(() => undefined);
+      return user;
+    },
     onSuccess: signedIn,
   });
+}
+
+export function browserTimeZone(): string | null {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
+  }
 }
 
 export function useSignOut() {
@@ -221,10 +254,53 @@ export function useArchiveCourse() {
   });
 }
 
-export function useTasks(params: { courseId?: number; status: "open" | "all" }) {
+export function useTasks(params: TaskQuery, enabled = true) {
   return useQuery({
     queryKey: keys.tasks(params),
-    queryFn: () => request<Task[]>(query("/api/tasks", { course_id: params.courseId, status: params.status })),
+    queryFn: () =>
+      request<Task[]>(
+        query("/api/tasks", {
+          course_id: params.courseId,
+          status: params.status,
+          due_after: params.dueAfter,
+          due_before: params.dueBefore,
+        }),
+      ),
+    enabled,
+    placeholderData: (previousData) => previousData,
+  });
+}
+
+/**
+ * Task counts and the Today plan both follow from tasks, so every task write refreshes them. Returned so
+ * the mutation stays pending until the lists are fresh, and nothing flickers back to the old state.
+ */
+function invalidatePlanning(client: QueryClient) {
+  return Promise.all(["tasks", "today", "courses"].map((key) => client.invalidateQueries({ queryKey: [key] })));
+}
+
+export function useUpdateTask() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, changes }: { id: number; changes: TaskChanges }) =>
+      request<Task>(`/api/tasks/${id}`, { method: "PATCH", body: changes }),
+    onSuccess: () => invalidatePlanning(client),
+  });
+}
+
+export function useCreateTask() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: NewTask) => request<Task>("/api/tasks", { method: "POST", body }),
+    onSuccess: () => invalidatePlanning(client),
+  });
+}
+
+export function useDeleteTask() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => request<void>(`/api/tasks/${id}`, { method: "DELETE" }),
+    onSuccess: () => invalidatePlanning(client),
   });
 }
 
@@ -303,5 +379,107 @@ export function useMarkAllRead() {
       void client.invalidateQueries({ queryKey: ["changes"] });
       void client.invalidateQueries({ queryKey: ["courses"] });
     },
+  });
+}
+
+// --- Today and planning settings ---
+
+export function useToday(enabled = true) {
+  return useQuery({
+    queryKey: keys.today,
+    queryFn: () => request<Today>("/api/today"),
+    enabled,
+    // The plan depends on the clock: refresh it every few minutes while the page is open.
+    refetchInterval: 5 * 60_000,
+  });
+}
+
+export function useSettings() {
+  return useQuery({
+    queryKey: keys.settings,
+    queryFn: () => request<PlanSettings>("/api/settings"),
+    staleTime: 5 * 60_000,
+  });
+}
+
+/** The zone plans and calendars are read in: the saved one, else this device's. */
+export function usePlanZone(): string {
+  return useSettings().data?.time_zone ?? browserTimeZone() ?? "UTC";
+}
+
+export function useUpdateSettings() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (changes: Partial<PlanSettings>) => request<PlanSettings>("/api/settings", { method: "PATCH", body: changes }),
+    onSuccess: (settings) => {
+      client.setQueryData(keys.settings, settings);
+      for (const key of ["today", "events", "tasks"]) void client.invalidateQueries({ queryKey: [key] });
+    },
+  });
+}
+
+// --- Calendar ---
+
+/** Events overlapping [from, to); both are ISO instants. */
+export function useEvents(from: string, to: string, enabled = true) {
+  return useQuery({
+    queryKey: keys.events(from, to),
+    queryFn: () => request<CalendarEvent[]>(query("/api/calendar/events", { from, to })),
+    enabled,
+    placeholderData: (previousData) => previousData,
+  });
+}
+
+/** Busy events change the free time the Today plan works with. */
+function invalidateCalendar(client: QueryClient) {
+  return Promise.all(["events", "today", "calendar-sources"].map((key) => client.invalidateQueries({ queryKey: [key] })));
+}
+
+export function useCreateEvent() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: EventFields) => request<CalendarEvent>("/api/calendar/events", { method: "POST", body }),
+    onSuccess: () => invalidateCalendar(client),
+  });
+}
+
+export function useUpdateEvent() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, changes }: { id: number; changes: Partial<EventFields> }) =>
+      request<CalendarEvent>(`/api/calendar/events/${id}`, { method: "PATCH", body: changes }),
+    onSuccess: () => invalidateCalendar(client),
+  });
+}
+
+export function useDeleteEvent() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => request<void>(`/api/calendar/events/${id}`, { method: "DELETE" }),
+    onSuccess: () => invalidateCalendar(client),
+  });
+}
+
+export function useCalendarSources() {
+  return useQuery({
+    queryKey: keys.sources,
+    queryFn: () => request<CalendarSource[]>("/api/calendar/sources"),
+  });
+}
+
+export function useImportCalendar() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { name?: string; file_name?: string; ics: string }) =>
+      request<CalendarImport>("/api/calendar/sources", { method: "POST", body }),
+    onSuccess: () => invalidateCalendar(client),
+  });
+}
+
+export function useDeleteCalendarSource() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => request<void>(`/api/calendar/sources/${id}`, { method: "DELETE" }),
+    onSuccess: () => invalidateCalendar(client),
   });
 }

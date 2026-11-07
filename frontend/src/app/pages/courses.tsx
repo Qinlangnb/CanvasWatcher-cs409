@@ -2,12 +2,13 @@ import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { isApiError } from "../api";
 import { plural } from "../format";
-import { BookIcon, ClipboardIcon, ExternalIcon, FolderIcon } from "../icons";
+import { BookIcon, ClipboardIcon, ExternalIcon, FolderIcon, PlusIcon } from "../icons";
 import { CourseCard, FileTable, GroupedTasks } from "../lists";
 import { useArchiveCourse, useCourse, useCourses, useFiles, useTasks } from "../queries";
 import { useNow } from "../shell";
+import { useTaskEditor } from "../tasks";
 import { useToast } from "../toast";
-import { Alert, EmptyState, PageHeader, SkeletonList, Spinner } from "../ui";
+import { Alert, EmptyState, PageHeader, QueryError, SkeletonList, Spinner } from "../ui";
 import { ChangeFeed, MarkAllReadButton } from "./changes";
 
 export function CoursesPage() {
@@ -112,19 +113,31 @@ function Tabs({
   );
 }
 
-function CourseTasks({ courseId }: { courseId: number }) {
+function CourseTasks({ courseId, archived }: { courseId: number; archived: boolean }) {
   const now = useNow();
   const tasks = useTasks({ courseId, status: "all" });
+  const editor = useTaskEditor();
+  const add = archived ? null : (
+    <button type="button" className="button small secondary" onClick={() => editor.create({ courseId })}>
+      <PlusIcon size={16} />
+      Add a task
+    </button>
+  );
   if (tasks.isPending) return <SkeletonList rows={4} label="Loading tasks" />;
-  if (tasks.isError) return <Alert>{tasks.error.message}</Alert>;
+  if (tasks.isError) return <QueryError title="Tasks didn't load" error={tasks.error} retry={() => void tasks.refetch()} />;
   if (tasks.data.length === 0) {
     return (
-      <EmptyState icon={<ClipboardIcon size={28} />} title="No assignments">
-        This course has no assignments in Canvas yet.
+      <EmptyState icon={<ClipboardIcon size={28} />} title="No tasks" action={add}>
+        This course has no assignments in Canvas yet. Add your own to plan study time for it.
       </EmptyState>
     );
   }
-  return <GroupedTasks tasks={tasks.data} now={now} />;
+  return (
+    <>
+      {add ? <div className="panel-toolbar">{add}</div> : null}
+      <GroupedTasks tasks={tasks.data} now={now} />
+    </>
+  );
 }
 
 function CourseFiles({ courseId }: { courseId: number }) {
@@ -202,7 +215,7 @@ export function CourseDetailPage() {
       />
       {data.archived ? (
         <Alert tone="info" title="This course is archived">
-          Its tasks and changes are hidden from Home and Changes. Restore it to see them there again.
+          Its tasks and changes are hidden from Today, the calendar and Changes. Restore it to see them there again.
         </Alert>
       ) : null}
 
@@ -213,7 +226,7 @@ export function CourseDetailPage() {
         onSelect={(next) => setSearch(next === "tasks" ? {} : { tab: next }, { replace: true })}
       />
       <section className="card tab-panel" role="tabpanel" id={`${idBase}-panel`} aria-labelledby={`${idBase}-tab-${tab}`} tabIndex={0}>
-        {tab === "tasks" ? <CourseTasks courseId={data.id} /> : null}
+        {tab === "tasks" ? <CourseTasks courseId={data.id} archived={data.archived} /> : null}
         {tab === "changes" ? (
           <>
             <div className="panel-toolbar">

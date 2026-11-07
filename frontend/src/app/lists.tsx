@@ -11,12 +11,14 @@ import {
   formatDue,
   formatFieldValue,
   formatLongDate,
+  formatMinutes,
   formatShortDate,
   plural,
   timeAgo,
 } from "./format";
 import { ClipboardIcon, DownloadIcon, ExternalIcon, FileIcon, MegaphoneIcon } from "./icons";
-import { useChange, useMarkRead } from "./queries";
+import { useChange, useMarkRead, usePlanZone } from "./queries";
+import { TaskCheck, useTaskEditor } from "./tasks";
 import type { Change, ChangeKind, ContentValue, Course, CourseFile, Task } from "./types";
 import { Alert, Badge, Dialog, SkeletonList } from "./ui";
 
@@ -51,31 +53,42 @@ export function CourseCard({ course }: { course: Course }) {
 
 // --- Tasks ---
 
-function TaskRow({ task, now, showCourse }: { task: Task; now: Date; showCourse: boolean }) {
-  const hint = task.state === "open" || task.state === "overdue" ? dueHint(task.due_at, now) : null;
+/** A badge for finished work: what Canvas says, or the student's own checkmark. */
+function doneLabel(task: Task): string {
+  if (task.submission_state === "graded") return "Graded";
+  if (task.completed_at) return "Done";
+  return "Submitted";
+}
+
+export function TaskRow({ task, now, showCourse = true, extra }: { task: Task; now: Date; showCourse?: boolean; extra?: ReactNode }) {
+  const zone = usePlanZone();
+  const editor = useTaskEditor();
+  const open = task.state === "open" || task.state === "overdue";
+  const hint = open ? dueHint(task.due_at, now, zone) : null;
   return (
     <li className={`task-row state-${task.state}`}>
       <span className={`task-marker type-${task.type}`} aria-hidden="true" />
+      <TaskCheck task={task} />
       <div className="task-main">
         <p className="task-title">
-          {task.html_url ? (
-            <a href={task.html_url} target="_blank" rel="noreferrer">
-              {task.title}
-              <span className="visually-hidden"> (opens Canvas in a new tab)</span>
-            </a>
-          ) : (
-            task.title
-          )}
+          <button type="button" className="task-open" onClick={() => editor.open(task)}>
+            {task.title}
+          </button>
         </p>
         <p className="task-meta">
           {showCourse ? <span className="course-chip">{task.course.code}</span> : null}
           <span>{TASK_TYPE_LABELS[task.type] ?? task.type}</span>
+          {task.source === "personal" ? <span>Your task</span> : null}
           {task.points_possible !== null ? <span>{plural(task.points_possible, "pt")}</span> : null}
+          {open && task.progress > 0 ? <span>{task.progress}% done</span> : null}
+          {open ? <span>{formatMinutes(task.remaining_minutes)} left</span> : null}
         </p>
+        {extra}
       </div>
       <div className="task-due">
-        <time dateTime={task.due_at ?? undefined}>{formatDue(task.due_at, now)}</time>
-        {task.state === "done" ? <Badge tone="success">{task.submission_state === "graded" ? "Graded" : "Submitted"}</Badge> : null}
+        <time dateTime={task.due_at ?? undefined}>{formatDue(task.due_at, now, zone)}</time>
+        {task.state === "done" ? <Badge tone="success">{doneLabel(task)}</Badge> : null}
+        {task.state === "ignored" ? <Badge>Ignored</Badge> : null}
         {hint ? <Badge tone={hint.tone}>{hint.label}</Badge> : null}
       </div>
     </li>

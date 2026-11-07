@@ -32,6 +32,9 @@ model User {
   files        CourseFile[]
   sourceItems  SourceItem[]
   changes      ChangeEvent[]
+  settings     UserSettings?
+  calendars    CalendarSource[]
+  events       CalendarEvent[]
 
   @@map("users")
 }
@@ -154,29 +157,45 @@ model Course {
   @@map("courses")
 }
 
-/// A Canvas assignment, plus the student's own progress on it.
+enum TaskSource {
+  /// Synced from a Canvas assignment; sync owns the title, due date and points.
+  CANVAS
+  /// Added by the student; sync never touches it.
+  PERSONAL
+
+  @@map("task_source")
+}
+
+/// A Canvas assignment or a task the student added, plus the student's own progress on it.
 model Task {
-  id              Int       @id @default(autoincrement())
-  userId          String    @map("user_id") @db.Uuid
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  courseId        Int       @map("course_id")
-  course          Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  canvasId        String    @map("canvas_id")
-  title           String
+  id               Int        @id @default(autoincrement())
+  userId           String     @map("user_id") @db.Uuid
+  user             User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId         Int        @map("course_id")
+  course           Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  source           TaskSource @default(CANVAS)
+  /// Null for personal tasks.
+  canvasId         String?    @map("canvas_id")
+  title            String
   /// assignment, homework, exam, project or reading, guessed from the title and group.
-  taskType        String    @map("task_type")
-  dueAt           DateTime? @map("due_at") @db.Timestamptz(3)
-  pointsPossible  Float?    @map("points_possible")
-  htmlUrl         String?   @map("html_url")
+  taskType         String     @map("task_type")
+  dueAt            DateTime?  @map("due_at") @db.Timestamptz(3)
+  pointsPossible   Float?     @map("points_possible")
+  htmlUrl          String?    @map("html_url")
   /// Canvas workflow_state of the submission: unsubmitted, submitted, graded or pending_review.
-  submissionState String?   @map("submission_state")
-  submittedAt     DateTime? @map("submitted_at") @db.Timestamptz(3)
-  completedAt     DateTime? @map("completed_at") @db.Timestamptz(3)
-  ignoredAt       DateTime? @map("ignored_at") @db.Timestamptz(3)
+  submissionState  String?    @map("submission_state")
+  submittedAt      DateTime?  @map("submitted_at") @db.Timestamptz(3)
+  completedAt      DateTime?  @map("completed_at") @db.Timestamptz(3)
+  ignoredAt        DateTime?  @map("ignored_at") @db.Timestamptz(3)
   /// Set when the assignment disappears from Canvas.
-  removedAt       DateTime? @map("removed_at") @db.Timestamptz(3)
-  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  removedAt        DateTime?  @map("removed_at") @db.Timestamptz(3)
+  /// Percent done, 0-100, as the student reports it.
+  progress         Int        @default(0)
+  /// The student's estimate of the total work; null means "use the default for the task type".
+  estimatedMinutes Int?       @map("estimated_minutes")
+  notes            String?
+  createdAt        DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@unique([courseId, canvasId])
   @@index([userId, dueAt])
@@ -264,4 +283,58 @@ model ChangeEvent {
   @@index([userId, readAt])
   @@index([courseId, detectedAt])
   @@map("change_events")
+}
+
+/// Planning preferences. A user without a row gets the defaults.
+model UserSettings {
+  userId            String   @id @map("user_id") @db.Uuid
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// IANA name, for example America/Chicago. Decides what "today" means.
+  timeZone          String   @default("America/Chicago") @map("time_zone")
+  /// How much study time Today plans for each day.
+  dailyStudyMinutes Int      @default(180) @map("daily_study_minutes")
+  /// Study window, in minutes after local midnight; the end is exclusive and may be 1440.
+  studyStartMinute  Int      @default(540) @map("study_start_minute")
+  studyEndMinute    Int      @default(1320) @map("study_end_minute")
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("user_settings")
+}
+
+/// An imported .ics file. Its events are replaced as a whole, never edited one by one.
+model CalendarSource {
+  id         Int             @id @default(autoincrement())
+  userId     String          @map("user_id") @db.Uuid
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  fileName   String?         @map("file_name")
+  importedAt DateTime        @default(now()) @map("imported_at") @db.Timestamptz(3)
+  events     CalendarEvent[]
+
+  @@index([userId])
+  @@map("calendar_sources")
+}
+
+/// One occurrence on the calendar. Recurring imported events are stored expanded.
+model CalendarEvent {
+  id        Int             @id @default(autoincrement())
+  userId    String          @map("user_id") @db.Uuid
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Null for events the user added by hand.
+  sourceId  Int?            @map("source_id")
+  source    CalendarSource? @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  title     String
+  location  String?
+  /// All-day events store UTC midnight of their first day and of the day after their last.
+  startAt   DateTime        @map("start_at") @db.Timestamptz(3)
+  endAt     DateTime        @map("end_at") @db.Timestamptz(3)
+  allDay    Boolean         @default(false) @map("all_day")
+  /// Busy time is subtracted from the study window when Today plans.
+  busy      Boolean         @default(true)
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([userId, startAt])
+  @@index([sourceId])
+  @@map("calendar_events")
 }

@@ -334,8 +334,9 @@ export class SyncService {
         update: data,
       });
     }
+    // Only Canvas tasks can disappear from Canvas; the student's own tasks are never touched.
     await tx.task.updateMany({
-      where: { courseId, removedAt: null, canvasId: { notIn: rows.map((row) => String(row.id)) } },
+      where: { courseId, source: "CANVAS", removedAt: null, canvasId: { notIn: rows.map((row) => String(row.id)) } },
       data: { removedAt: now },
     });
   }

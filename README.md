@@ -17,10 +17,10 @@ CanvasWatcher collects course materials, deadlines, tasks, and meaningful change
 | Accounts and sessions | Done (week 1), with tests |
 | Canvas connection, manual and scheduled sync | Done (week 2), tested against a fake Canvas server |
 | Courses, tasks, files, changes (read, mark read, archive) | Done (week 2) |
-| Frontend | Rewritten in `frontend/src/app` with React Router: sign-in, sign-up, onboarding, Home, Courses, Changes, Files, Settings |
-| Today, Timeline, Calendar, task edits | Week 3; the old screens in `frontend/src` are no longer loaded and will be deleted then |
+| Today plan, Timeline, Calendar (.ics import, own events), study settings, task edits | Done (week 3), with tests |
+| Frontend | Rewritten in `frontend/src/app` with React Router: sign-in, sign-up, onboarding, Today, Calendar (week and timeline views), Courses, Changes, Files, Settings. The previous interface was deleted in week 3 |
 
-### API so far
+### API
 
 | Method and path | Purpose | Success |
 | --- | --- | --- |
@@ -37,7 +37,15 @@ CanvasWatcher collects course materials, deadlines, tasks, and meaningful change
 | `GET /api/sync/runs/latest`, `GET /api/sync/runs/{id}` | Sync progress and result | 200 |
 | `GET /api/courses[?archived=true]` | Active (or only archived) courses with counts | 200 |
 | `GET /api/courses/{id}`, `PATCH /api/courses/{id}` | One course; archive or restore it | 200 |
-| `GET /api/tasks[?course_id=&status=all]` | Open tasks (or all) by due date, undated last | 200 |
+| `GET /api/tasks[?course_id=&status=all&due_after=&due_before=]` | Open tasks (or all) by due date, undated last | 200 |
+| `POST /api/tasks` | Add a personal task to one of your courses | 201 |
+| `GET /api/tasks/{id}`, `PATCH /api/tasks/{id}` | One task; set `done`, `ignored`, `progress`, `estimated_minutes`, `notes` (and `title`, `type`, `due_at` on personal tasks) | 200 |
+| `DELETE /api/tasks/{id}` | Delete a personal task (Canvas tasks can only be ignored) | 204 |
+| `GET /api/today` | Today's plan: free time in the study window after busy events, planned tasks with reasons, today's events, what was done today | 200 |
+| `GET /api/calendar/events?from=&to=` | Events overlapping a range (imported and your own) | 200 |
+| `POST /api/calendar/events`, `PATCH /api/calendar/events/{id}`, `DELETE /api/calendar/events/{id}` | Add, edit or delete your own events; busy events take time out of the plan | 201, 200, 204 |
+| `GET /api/calendar/sources`, `POST /api/calendar/sources`, `DELETE /api/calendar/sources/{id}` | Imported .ics calendars: list, import (up to 1.5 MB, 20 calendars), remove with their events | 200, 201, 204 |
+| `GET /api/settings`, `PATCH /api/settings` | Time zone, daily study goal and study window | 200 |
 | `GET /api/files[?course_id=&q=]` | File metadata, newest first | 200 |
 | `GET /api/files/{id}/download` | Redirect to a fresh Canvas download link | 302 |
 | `GET /api/changes[?course_id=&unread=&limit=&before=]` | Change feed, newest first, cursor paging | 200 |
@@ -57,7 +65,7 @@ cp .env.example .env    # then set SESSION_SECRET and CREDENTIALS_KEY (see the c
 docker compose up -d --build
 ```
 
-Open `http://localhost:8080`. nginx serves the frontend and forwards `/api` to the API container; the API port is not published. PostgreSQL listens on `127.0.0.1:5432` only.
+Open `http://localhost:8080`. nginx serves the frontend and forwards `/api` to the API container; the API port is not published. PostgreSQL listens on `127.0.0.1:5432` only. If that port is taken or reserved (Windows can reserve port ranges), set `POSTGRES_PORT` in `.env` and use the same port in `server/.env`.
 
 ## Develop
 
@@ -88,8 +96,7 @@ CI (`.github/workflows/ci.yml`) runs the server checks against a PostgreSQL serv
 | Path | Purpose |
 | --- | --- |
 | `server/` | Node.js REST API: Express routes, Prisma schema and migrations, tests |
-| `frontend/src/app/` | The React interface: `router.tsx` (routes and guards), `pages/`, shared `ui.tsx`, `queries.ts` (React Query hooks), `app.css` (design tokens, light and dark) |
-| `frontend/src/` (other files) | The previous interface, kept until week 3 as a reference; not loaded |
+| `frontend/src/app/` | The React interface: `router.tsx` (routes and guards), `pages/`, shared `ui.tsx`, `queries.ts` (React Query hooks), `tasks.tsx` and `events.tsx` (editors), `forms.ts` and `zoned.ts` (pure form and time-zone helpers, unit-tested), `app.css` (design tokens, light and dark) |
 | `docs/cs409/` | Rewrite plan and course deliverables |
 | `legacy/` | The original Python backend, gateway and deployment files, kept as a porting reference |
 

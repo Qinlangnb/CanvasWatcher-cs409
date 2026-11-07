@@ -10,7 +10,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-canvaswatcher}
       POSTGRES_DB: canvaswatcher
     ports:
-      - "127.0.0.1:5432:5432"
+      # POSTGRES_PORT moves the host port, e.g. when Windows reserves 5432 (see README).
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

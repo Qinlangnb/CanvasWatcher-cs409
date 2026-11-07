@@ -5,6 +5,8 @@ import {
   useState,
   type InputHTMLAttributes,
   type ReactNode,
+  type SelectHTMLAttributes,
+  type TextareaHTMLAttributes,
 } from "react";
 import { AlertIcon, CheckIcon, CloseIcon, EyeIcon, EyeOffIcon } from "./icons";
 
@@ -96,6 +98,75 @@ export function Field({ label, hint, error, trailing, id, className, ...input }:
   );
 }
 
+/** Label, hint and error around any control; `children` receives the ids to wire up. */
+function FieldFrame({
+  label,
+  hint,
+  error,
+  id,
+  className,
+  children,
+}: {
+  label: string;
+  hint?: ReactNode;
+  error?: string;
+  id?: string;
+  className?: string;
+  children: (ids: { id: string; describedBy: string | undefined }) => ReactNode;
+}) {
+  const generated = useId();
+  const controlId = id ?? generated;
+  const hintId = hint ? `${controlId}-hint` : undefined;
+  const errorId = error ? `${controlId}-error` : undefined;
+  return (
+    <div className={`field${error ? " has-error" : ""}${className ? ` ${className}` : ""}`}>
+      <label htmlFor={controlId}>{label}</label>
+      {hint ? (
+        <p className="field-hint" id={hintId}>
+          {hint}
+        </p>
+      ) : null}
+      {children({ id: controlId, describedBy: [hintId, errorId].filter(Boolean).join(" ") || undefined })}
+      {error ? (
+        <p className="field-error" id={errorId}>
+          <AlertIcon size={16} />
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+type SelectFieldProps = SelectHTMLAttributes<HTMLSelectElement> & { label: string; hint?: ReactNode; error?: string };
+
+export function SelectField({ label, hint, error, id, className, children, ...select }: SelectFieldProps) {
+  return (
+    <FieldFrame label={label} hint={hint} error={error} id={id} className={className}>
+      {(ids) => (
+        <div className="input-box">
+          <select id={ids.id} aria-invalid={error ? true : undefined} aria-describedby={ids.describedBy} {...select}>
+            {children}
+          </select>
+        </div>
+      )}
+    </FieldFrame>
+  );
+}
+
+type TextAreaFieldProps = TextareaHTMLAttributes<HTMLTextAreaElement> & { label: string; hint?: ReactNode; error?: string };
+
+export function TextAreaField({ label, hint, error, id, className, ...textarea }: TextAreaFieldProps) {
+  return (
+    <FieldFrame label={label} hint={hint} error={error} id={id} className={className}>
+      {(ids) => (
+        <div className="input-box">
+          <textarea id={ids.id} aria-invalid={error ? true : undefined} aria-describedby={ids.describedBy} rows={4} {...textarea} />
+        </div>
+      )}
+    </FieldFrame>
+  );
+}
+
 export function PasswordField(props: Omit<FieldProps, "type" | "trailing">) {
   const [visible, setVisible] = useState(false);
   return (
@@ -137,6 +208,32 @@ export function Alert({
       </div>
       {action ? <div className="alert-action">{action}</div> : null}
     </div>
+  );
+}
+
+/** A failed load, with the server's sentence and a way to try again. */
+export function QueryError({ error, retry, title = "This didn't load" }: { error: Error; retry: () => void; title?: string }) {
+  const [retrying, setRetrying] = useState(false);
+  return (
+    <Alert
+      title={title}
+      action={
+        <button
+          type="button"
+          className="button small secondary"
+          disabled={retrying}
+          onClick={() => {
+            setRetrying(true);
+            Promise.resolve(retry()).finally(() => setRetrying(false));
+          }}
+        >
+          {retrying ? <Spinner size={14} /> : null}
+          Try again
+        </button>
+      }
+    >
+      {error.message}
+    </Alert>
   );
 }
 
@@ -183,7 +280,10 @@ export function SkeletonList({ rows = 4, label = "Loading" }: { rows?: number; l
   );
 }
 
-/** A modal built on <dialog>: the browser traps focus, closes on Esc and restores focus on close. */
+/**
+ * A modal built on <dialog>: the browser traps focus and restores it on close. `open` decides: Esc, the
+ * backdrop and the close button only ask `onClose`, so a form can keep itself open to protect unsaved work.
+ */
 export function Dialog({
   open,
   onClose,
@@ -201,20 +301,33 @@ export function Dialog({
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
+  const wanted = useRef(open);
+  wanted.current = open;
 
+  // After every render, so a dialog the browser closed on its own while `open` stays true comes back.
   useEffect(() => {
     const dialog = ref.current;
     if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
+    if (open && !dialog.open) {
+      dialog.showModal();
+      // React's autoFocus runs before the dialog is shown; this is the dialog's own first field.
+      dialog.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+    }
     if (!open && dialog.open) dialog.close();
-  }, [open]);
+  });
 
   return (
     <dialog
       ref={ref}
       className={`dialog dialog-${size}`}
       aria-labelledby={titleId}
-      onClose={onClose}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      onClose={() => {
+        if (wanted.current) onClose();
+      }}
       onClick={(event) => {
         // A click on the backdrop lands on the <dialog> itself.
         if (event.target === ref.current) onClose();

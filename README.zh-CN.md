@@ -17,10 +17,10 @@ CanvasWatcher 从 Canvas 和受支持的课程网站汇集资料、截止日期�
 | 账号与会话 | 已完成（第 1 周），有测试 |
 | Canvas 连接、手动与定时同步 | 已完成（第 2 周），用假的 Canvas 服务器测试 |
 | 课程、任务、文件、变动（只读、标记已读、归档） | 已完成（第 2 周） |
-| 前端 | 在 `frontend/src/app` 用 React Router 重写：登录、注册、引导、首页、课程、变动、文件、设置 |
-| Today、Timeline、日历、任务编辑 | 第 3 周；`frontend/src` 中的旧界面已不再加载，届时删除 |
+| Today 计划、Timeline、日历（.ics 导入、自建事件）、学习设置、任务编辑 | 已完成（第 3 周），有测试 |
+| 前端 | 在 `frontend/src/app` 用 React Router 重写：登录、注册、引导、Today、日历（周视图与 Timeline）、课程、变动、文件、设置；旧界面已在第 3 周删除 |
 
-### 已有 API
+### API
 
 | 方法与路径 | 作用 | 成功状态 |
 | --- | --- | --- |
@@ -37,7 +37,15 @@ CanvasWatcher 从 Canvas 和受支持的课程网站汇集资料、截止日期�
 | `GET /api/sync/runs/latest`、`GET /api/sync/runs/{id}` | 同步进度与结果 | 200 |
 | `GET /api/courses[?archived=true]` | 当前（或仅已归档）课程及计数 | 200 |
 | `GET /api/courses/{id}`、`PATCH /api/courses/{id}` | 单门课程；归档或恢复 | 200 |
-| `GET /api/tasks[?course_id=&status=all]` | 未完成（或全部）任务，按截止时间排序，无截止的排最后 | 200 |
+| `GET /api/tasks[?course_id=&status=all&due_after=&due_before=]` | 未完成（或全部）任务，按截止时间排序，无截止的排最后 | 200 |
+| `POST /api/tasks` | 在自己的某门课下新建个人任务 | 201 |
+| `GET /api/tasks/{id}`、`PATCH /api/tasks/{id}` | 单个任务；设置 `done`、`ignored`、`progress`、`estimated_minutes`、`notes`（个人任务还可改 `title`、`type`、`due_at`） | 200 |
+| `DELETE /api/tasks/{id}` | 删除个人任务（Canvas 任务只能忽略） | 204 |
+| `GET /api/today` | 今日计划：学习时段内扣除忙碌事件后的空闲时间、带理由的计划任务、今天的事件、今天已完成的任务 | 200 |
+| `GET /api/calendar/events?from=&to=` | 与区间重叠的事件（导入的与自建的） | 200 |
+| `POST /api/calendar/events`、`PATCH /api/calendar/events/{id}`、`DELETE /api/calendar/events/{id}` | 新建、修改、删除自建事件；忙碌事件会从计划里扣除时间 | 201、200、204 |
+| `GET /api/calendar/sources`、`POST /api/calendar/sources`、`DELETE /api/calendar/sources/{id}` | 导入的 .ics 日历：列表、导入（最大 1.5 MB，最多 20 个）、连同事件一起删除 | 200、201、204 |
+| `GET /api/settings`、`PATCH /api/settings` | 时区、每日学习目标与学习时段 | 200 |
 | `GET /api/files[?course_id=&q=]` | 文件元数据，最新在前 | 200 |
 | `GET /api/files/{id}/download` | 302 跳转到 Canvas 新生成的下载链接 | 302 |
 | `GET /api/changes[?course_id=&unread=&limit=&before=]` | 变动列表，最新在前，游标分页 | 200 |
@@ -57,7 +65,7 @@ cp .env.example .env    # 再设置 SESSION_SECRET 与 CREDENTIALS_KEY（见文�
 docker compose up -d --build
 ```
 
-打开 `http://localhost:8080`。nginx 提供前端并把 `/api` 转发到 API 容器，API 端口不对外发布；PostgreSQL 只监听 `127.0.0.1:5432`。Windows PowerShell 可用 `Copy-Item` 替代 `cp`。
+打开 `http://localhost:8080`。nginx 提供前端并把 `/api` 转发到 API 容器，API 端口不对外发布；PostgreSQL 只监听 `127.0.0.1:5432`；该端口被占用或被 Windows 保留时，在 `.env` 设置 `POSTGRES_PORT`，并在 `server/.env` 使用同一端口。Windows PowerShell 可用 `Copy-Item` 替代 `cp`。
 
 ## 开发
 
@@ -88,8 +96,7 @@ CI（`.github/workflows/ci.yml`）会在 PostgreSQL 服务上运行后端检查�
 | 路径 | 用途 |
 | --- | --- |
 | `server/` | Node.js REST API：Express 路由、Prisma 数据模型与迁移、测试 |
-| `frontend/src/app/` | React 界面：`router.tsx`（路由与登录守卫）、`pages/`、公共组件 `ui.tsx`、`queries.ts`（React Query hooks）、`app.css`（设计 token，深浅色） |
-| `frontend/src/`（其余文件） | 旧界面，保留到第 3 周作参考，已不再加载 |
+| `frontend/src/app/` | React 界面：`router.tsx`（路由与登录守卫）、`pages/`、公共组件 `ui.tsx`、`queries.ts`（React Query hooks）、`tasks.tsx` 与 `events.tsx`（编辑器）、`forms.ts` 与 `zoned.ts`（表单与时区的纯函数，有单元测试）、`app.css`（设计 token，深浅色） |
 | `docs/cs409/` | 重写方案与课程交付文档 |
 | `legacy/` | 原 Python 后端、网关与部署文件，仅作移植对照 |
 

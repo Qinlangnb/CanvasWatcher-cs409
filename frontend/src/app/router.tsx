@@ -4,9 +4,10 @@ import { SignInPage, SignUpPage } from "./pages/auth";
 import { ChangesPage } from "./pages/changes";
 import { CourseDetailPage, CoursesPage } from "./pages/courses";
 import { FilesPage } from "./pages/files";
-import { HomePage } from "./pages/home";
+import { CalendarPage } from "./pages/calendar";
 import { NotFoundPage, RouteErrorPage } from "./pages/notFound";
 import { SettingsPage } from "./pages/settings";
+import { TodayPage } from "./pages/today";
 import { WelcomePage } from "./pages/welcome";
 import { AppShell, PublicOnly, RequireAuth } from "./shell";
 
@@ -34,7 +35,8 @@ export const routes = [
             path: "/",
             element: <AppShell />,
             children: [
-              { index: true, element: <HomePage /> },
+              { index: true, element: <TodayPage /> },
+              { path: "calendar", element: <CalendarPage /> },
               { path: "courses", element: <CoursesPage /> },
               { path: "courses/:courseId", element: <CourseDetailPage /> },
               { path: "changes", element: <ChangesPage /> },
