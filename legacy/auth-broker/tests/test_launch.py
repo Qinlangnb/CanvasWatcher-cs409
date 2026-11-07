@@ -60,8 +60,8 @@ class LaunchTests(unittest.TestCase):
             launch.record(root, 'PORT_OCCUPIED')
             self.assertEqual(json.loads((root / 'status.json').read_text())['state'], 'PORT_OCCUPIED')
         source = Path(launch.__file__).read_text()
-        self.assertIn('except PortOccupied:', source)
-        self.assertIn('notify_port_conflict()', source)
+        self.assertIn('except PortOccupied as problem:', source)
+        self.assertIn('record(root, problem.state)', source)
         self.assertIn('No other process was stopped.', source)
 
     def make_supervisor(self):
@@ -69,7 +69,7 @@ class LaunchTests(unittest.TestCase):
             return launch.Supervisor({'python': 'installed-python', 'tunnel': 'fixed-tunnel.py'},
                                      child=FakeChild, discover=lambda: 'https://192.168.1.10:8080', ready=lambda: True)
 
-    @patch.object(launch, 'port_free', return_value=True)
+    @patch.object(launch, 'port_state', return_value='free')
     def test_owned_start_duplicate_and_recovery(self, free):
         s = self.make_supervisor()
         self.assertEqual(s.tick(0), 'CONNECTING')
@@ -86,21 +86,21 @@ class LaunchTests(unittest.TestCase):
         self.assertIsNot(s.tunnel, first_tunnel)
         s.close()
 
-    @patch.object(launch, 'port_free', return_value=False)
+    @patch.object(launch, 'port_state', return_value='in_use')
     def test_foreign_port_owner_not_stopped(self, free):
         s = self.make_supervisor()
         with self.assertRaises(launch.PortOccupied):
             s.tick(0)
         self.assertIsNone(s.tunnel); self.assertIsNone(s.broker)
 
-    @patch.object(launch, 'port_free', return_value=True)
+    @patch.object(launch, 'port_state', return_value='free')
     def test_callback_unavailable_does_not_claim_ready(self, free):
         s = self.make_supervisor(); s.tick(0); s.ready = lambda: False
         self.assertEqual(s.tick(2), 'CALLBACK_UNAVAILABLE')
         self.assertIsNone(s.broker)
         s.close()
 
-    @patch.object(launch, 'port_free', return_value=True)
+    @patch.object(launch, 'port_state', return_value='free')
     def test_periodic_discovery_failure_retains_healthy_children_then_retries(self, free):
         s = self.make_supervisor(); s.tick(0); s.tick(2)
         broker, tunnel, origin = s.broker, s.tunnel, s.origin
@@ -117,7 +117,7 @@ class LaunchTests(unittest.TestCase):
         self.assertEqual(s.origin, 'https://192.168.1.11:8080')
         s.close()
 
-    @patch.object(launch, 'port_free', return_value=True)
+    @patch.object(launch, 'port_state', return_value='free')
     def test_origin_change_restarts_only_owned_broker(self, free):
         s = self.make_supervisor(); s.tick(0); s.tick(2)
         old = s.broker; tunnel = s.tunnel

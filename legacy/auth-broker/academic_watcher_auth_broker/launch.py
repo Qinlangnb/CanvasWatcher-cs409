@@ -1,4 +1,5 @@
 """Fixed start-only URI activation; supervise only owned broker/tunnel children."""
+import errno
 import importlib.util
 import ipaddress
 import json
@@ -19,7 +20,19 @@ START_URIS = frozenset(('academicwatcher://start', 'academicwatcher://start/'))
 
 
 class PortOccupied(RuntimeError):
-    pass
+    """A required local port is in use by an application this launcher does not own."""
+
+    state = 'PORT_OCCUPIED'
+
+    def __init__(self, ports):
+        self.ports = tuple(ports)
+        super().__init__(self.state)
+
+
+class PortReserved(PortOccupied):
+    """Windows keeps the port in an excluded range (Hyper-V, WSL, Docker); nothing listens on it."""
+
+    state = 'PORT_RESERVED'
 
 
 def validate_activation(args):
@@ -88,13 +101,37 @@ def origin_from_metadata(data):
     return origin
 
 
-def port_free(port):
+WSAEACCES = 10013
+
+
+def port_state(port):
+    """'free', 'in_use', or 'reserved' when Windows refuses the bind and nothing listens there."""
     with socket.socket() as probe:
         try:
             probe.bind(('127.0.0.1', port))
-            return True
-        except OSError:
-            return False
+            return 'free'
+        except OSError as error:
+            if getattr(error, 'winerror', None) != WSAEACCES and error.errno != errno.EACCES:
+                return 'in_use'
+    # An application holding the port with SO_EXCLUSIVEADDRUSE also yields
+    # WSAEACCES, but it accepts connections; an excluded range does not.
+    with socket.socket() as probe:
+        probe.settimeout(.5)
+        return 'in_use' if probe.connect_ex(('127.0.0.1', port)) == 0 else 'reserved'
+
+
+def port_free(port):
+    return port_state(port) == 'free'
+
+
+def require_ports(*ports):
+    states = {port: port_state(port) for port in ports}
+    reserved = [port for port in ports if states[port] == 'reserved']
+    if reserved:
+        raise PortReserved(reserved)
+    busy = [port for port in ports if states[port] == 'in_use']
+    if busy:
+        raise PortOccupied(busy)
 
 
 def backend_ready(origin='http://127.0.0.1:8000'):
@@ -156,8 +193,7 @@ class Supervisor:
                 process.stop(); setattr(self, name, None)
 
     def start_broker(self):
-        if not port_free(8765):
-            raise PortOccupied('Broker port occupied by an unmanaged application')
+        require_ports(8765)
         env = dict(os.environ, AW_BROKER_BACKEND=self.backend, AW_BROKER_PORT='8765',
                    AW_BROKER_ORIGINS=self.origin)
         self.broker = self.child([self.python, '-m', 'academic_watcher_auth_broker'], env=env)
@@ -185,8 +221,7 @@ class Supervisor:
                 deadline = time.monotonic() + 5
                 while not (port_free(8000) and port_free(8765)) and time.monotonic() < deadline:
                     time.sleep(.05)
-            if not port_free(8000) or not port_free(8765):
-                raise PortOccupied('Required port occupied by an unmanaged application')
+            require_ports(8000, 8765)
             self.origin = lan_origin(self.discover())
             self.tunnel = self.child([self.python, self.tunnel_script])
             self.last_origin_check = now
@@ -253,8 +288,7 @@ class RemoteSupervisor:
             return 'CALLBACK_UNAVAILABLE'
         if not self.broker or self.broker.poll() is not None:
             self.close()
-            if not port_free(8765):
-                raise PortOccupied('Broker port occupied by an unmanaged application')
+            require_ports(8765)
             env = dict(os.environ, AW_BROKER_BACKEND=self.backend, AW_BROKER_PORT='8765',
                        AW_BROKER_ORIGINS=self.origin)
             self.broker = self.child([self.python, '-m', 'academic_watcher_auth_broker'], env=env)
@@ -273,10 +307,28 @@ def record(root, state):
     temporary.replace(root / 'status.json')
 
 
-def notify_port_conflict():
+def port_conflict_message(problem):
+    """Fixed wording plus the port numbers; never exception or system text."""
+    ports = ' and '.join(str(port) for port in problem.ports)
+    plural = len(problem.ports) > 1
+    if isinstance(problem, PortReserved):
+        commands = '\n'.join(
+            ['net stop winnat']
+            + [f'netsh int ipv4 add excludedportrange protocol=tcp startport={port} numberofports=1'
+               for port in problem.ports]
+            + ['net start winnat'])
+        return (f'Windows has reserved local port{"s" if plural else ""} {ports} for Hyper-V, WSL or Docker, '
+                f'so the broker cannot use {"them" if plural else "it"}. No other process was stopped.\n\n'
+                'To keep the port for Academic Watcher, run these commands in an administrator PowerShell '
+                '(WSL and Docker networking pause for a moment), then click Start broker again:\n\n' + commands)
+    return (f'Local port{"s" if plural else ""} {ports} {"are" if plural else "is"} in use by another application. '
+            'No other process was stopped. Close that application, then click Start broker again.')
+
+
+def notify_port_conflict(problem):
     if os.name == 'nt':
         import ctypes
-        ctypes.windll.user32.MessageBoxW(None, 'Local port 8000 or 8765 is occupied by another application. No other process was stopped. Close the conflicting local service, then retry Start broker.', 'Academic Watcher Broker', 0x30)
+        ctypes.windll.user32.MessageBoxW(None, port_conflict_message(problem), 'Academic Watcher Broker', 0x30)
 
 
 def run(args):
@@ -288,21 +340,22 @@ def run(args):
         config = json.loads((root / 'config.json').read_text())
         supervisor = supervisor_for(config)
         delay = 2
-        notified = False
+        notified = None
         try:
             while not (root / 'stop.request').exists():
                 try:
                     state = supervisor.tick(time.monotonic())
                     record(root, state)
                     delay = 2
-                    notified = False
-                except PortOccupied:
+                    notified = None
+                except PortOccupied as problem:
                     supervisor.close()
-                    record(root, 'PORT_OCCUPIED')
-                    if not notified:
-                        notified = True
+                    record(root, problem.state)
+                    # Tell the user once per distinct problem, not on every retry.
+                    if notified != (problem.state, problem.ports):
+                        notified = (problem.state, problem.ports)
                         # Native attention must not block shutdown or recovery.
-                        threading.Thread(target=notify_port_conflict, daemon=True).start()
+                        threading.Thread(target=notify_port_conflict, args=(problem,), daemon=True).start()
                     delay = min(delay * 2, 30)
                 except Exception:
                     supervisor.close()

@@ -1,4 +1,5 @@
 import asyncio
+import errno
 import json
 from concurrent.futures import ThreadPoolExecutor
 
@@ -308,7 +309,7 @@ def test_remote_launcher_mode_runs_only_the_broker(tmp_path, monkeypatch):
         def stop(self):
             pass
 
-    monkeypatch.setattr(launch, "port_free", lambda port: True)
+    monkeypatch.setattr(launch, "port_state", lambda port: "free")
     config = {"python": str(python), "backend": "https://watcher.example.com/watcher/", "origin": "https://watcher.example.com"}
     down = launch.RemoteSupervisor(config, child=Child, ready=lambda backend: False)
     assert down.tick(0) == "CALLBACK_UNAVAILABLE" and not started
@@ -321,6 +322,108 @@ def test_remote_launcher_mode_runs_only_the_broker(tmp_path, monkeypatch):
                 {**config, "tunnel": "x"}):
         with pytest.raises(ValueError):
             launch.supervisor_for(bad)
+
+
+def _probe_socket(bind_error=None, accepts=False):
+    class Probe:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def bind(self, address):
+            if bind_error:
+                raise bind_error
+
+        def settimeout(self, value):
+            pass
+
+        def connect_ex(self, address):
+            return 0 if accepts else 10035
+
+    return type("FakeSocketModule", (), {"socket": Probe})
+
+
+@pytest.mark.parametrize("bind_error, accepts, expected", [
+    (None, False, "free"),
+    (OSError(errno.EADDRINUSE, "in use"), False, "in_use"),
+    # Excluded port range: Windows refuses the bind and nothing answers.
+    (OSError(errno.EACCES, "denied"), False, "reserved"),
+    # SO_EXCLUSIVEADDRUSE owner: same refusal, but the port accepts connections.
+    (OSError(errno.EACCES, "denied"), True, "in_use"),
+])
+def test_launcher_tells_reserved_ports_from_ports_in_use(monkeypatch, bind_error, accepts, expected):
+    from academic_watcher_auth_broker import launch
+    monkeypatch.setattr(launch, "socket", _probe_socket(bind_error, accepts))
+    assert launch.port_state(8765) == expected
+
+
+def test_launcher_reports_which_ports_and_why(tmp_path, monkeypatch):
+    from academic_watcher_auth_broker import launch
+    python = tmp_path / "python.exe"
+    python.write_text("")
+    states = {8000: "in_use", 8765: "reserved"}
+    monkeypatch.setattr(launch, "port_state", lambda port: states[port])
+    config = {"python": str(python), "backend": "https://watcher.example.com/watcher",
+              "origin": "https://watcher.example.com"}
+    remote = launch.RemoteSupervisor(config, ready=lambda backend: True)
+    with pytest.raises(launch.PortReserved) as reserved:
+        remote.tick(0)
+    assert reserved.value.ports == (8765,) and reserved.value.state == "PORT_RESERVED"
+    message = launch.port_conflict_message(reserved.value)
+    assert "Windows has reserved local port 8765" in message and "8000" not in message
+    assert "netsh int ipv4 add excludedportrange protocol=tcp startport=8765 numberofports=1" in message
+
+    # A reserved port is reported before one that is merely busy.
+    with pytest.raises(launch.PortReserved):
+        launch.require_ports(8000, 8765)
+    states[8765] = "free"
+    with pytest.raises(launch.PortOccupied) as busy:
+        launch.require_ports(8000, 8765)
+    assert type(busy.value) is launch.PortOccupied and busy.value.ports == (8000,)
+    message = launch.port_conflict_message(busy.value)
+    assert message.startswith("Local port 8000 is in use by another application") and "8765" not in message
+
+
+def test_launcher_records_each_port_problem_and_notifies_once_per_problem(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from academic_watcher_auth_broker import launch
+    (tmp_path / "config.json").write_text("{}")
+    problems = iter([launch.PortReserved([8765]), launch.PortReserved([8765]), launch.PortOccupied([8765]),
+                     "RUNNING", launch.PortReserved([8765])])
+
+    class Supervisor:
+        def tick(self, now):
+            problem = next(problems, None)
+            if problem is None:
+                (tmp_path / "stop.request").write_text("")
+                return "RUNNING"
+            if isinstance(problem, str):
+                return problem
+            raise problem
+
+        def close(self):
+            pass
+
+    @contextmanager
+    def acquired(root):
+        yield True
+
+    recorded, notified = [], []
+    monkeypatch.setattr(launch, "runtime_root", lambda: tmp_path)
+    monkeypatch.setattr(launch, "singleton", acquired)
+    monkeypatch.setattr(launch, "supervisor_for", lambda config: Supervisor())
+    monkeypatch.setattr(launch, "record", lambda root, state: recorded.append(state))
+    monkeypatch.setattr(launch, "time", SimpleNamespace(monotonic=lambda: 0, sleep=lambda seconds: None))
+    monkeypatch.setattr(launch, "threading", SimpleNamespace(
+        Thread=lambda target, args, daemon: SimpleNamespace(start=lambda: notified.append(args[0].state))))
+    launch.run(["academicwatcher://start"])
+    assert recorded == ["PORT_RESERVED", "PORT_RESERVED", "PORT_OCCUPIED", "RUNNING", "PORT_RESERVED",
+                        "RUNNING", "STOPPED"]
+    assert notified == ["PORT_RESERVED", "PORT_OCCUPIED", "PORT_RESERVED"]
 
 
 def test_gateway_host_is_pinned_to_doh_address_with_sni_kept():

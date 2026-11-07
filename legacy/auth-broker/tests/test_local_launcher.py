@@ -16,7 +16,7 @@ class LocalLauncherTests(unittest.TestCase):
         with patch.object(launch, 'safe_file', side_effect=lambda value: value):
             return launch.Supervisor(config, child=FakeChild, ready=lambda: True)
 
-    @patch.object(launch, 'port_free', return_value=True)
+    @patch.object(launch, 'port_state', return_value='free')
     def test_local_mode_owns_only_broker_not_existing_backend(self, free):
         s = self.supervisor()
         self.assertEqual(s.tick(0), 'STARTING')
@@ -32,7 +32,7 @@ class LocalLauncherTests(unittest.TestCase):
         self.assertIs(s.broker, broker); self.assertFalse(broker.stopped)
         s.close()
 
-    @patch.object(launch, 'port_free', return_value=True)
+    @patch.object(launch, 'port_state', return_value='free')
     def test_local_dead_broker_recovers_owned_child(self, free):
         s = self.supervisor(); s.tick(0)
         previous = s.broker; previous.dead = True
@@ -40,7 +40,7 @@ class LocalLauncherTests(unittest.TestCase):
         self.assertTrue(previous.stopped); self.assertIsNot(s.broker, previous)
         s.close()
 
-    @patch.object(launch, 'port_free', return_value=False)
+    @patch.object(launch, 'port_state', return_value='in_use')
     def test_local_foreign_broker_port_is_not_stopped(self, free):
         s = self.supervisor()
         with self.assertRaises(launch.PortOccupied):
