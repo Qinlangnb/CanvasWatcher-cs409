@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:migrate": "prisma migrate dev",
-    "db:deploy": "prisma migrate deploy"
+    "db:deploy": "prisma migrate deploy",
+    "bench": "tsx bench/queries.ts"
   },
   "dependencies": {
     "@node-rs/argon2": "2.2.2",

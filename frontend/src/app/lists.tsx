@@ -16,9 +16,11 @@ import {
   plural,
   timeAgo,
 } from "./format";
-import { ClipboardIcon, DownloadIcon, ExternalIcon, FileIcon, MegaphoneIcon } from "./icons";
-import { useChange, useMarkRead, usePlanZone } from "./queries";
+import { CanvasLink } from "./demo";
+import { ClipboardIcon, DownloadIcon, FileIcon, MegaphoneIcon } from "./icons";
+import { useChange, useIsDemo, useMarkRead, usePlanZone } from "./queries";
 import { TaskCheck, useTaskEditor } from "./tasks";
+import { useToast } from "./toast";
 import type { Change, ChangeKind, ContentValue, Course, CourseFile, Task } from "./types";
 import { Alert, Badge, Dialog, SkeletonList } from "./ui";
 
@@ -300,13 +302,7 @@ export function ChangeDialog({ id, onClose }: { id: number | null; onClose: () =
             >
               Mark as unread
             </button>
-            {detail.html_url ? (
-              <a className="button primary" href={detail.html_url} target="_blank" rel="noreferrer">
-                Open in Canvas
-                <ExternalIcon size={16} />
-                <span className="visually-hidden"> (opens in a new tab)</span>
-              </a>
-            ) : null}
+            {detail.html_url ? <CanvasLink href={detail.html_url} className="button primary" /> : null}
           </>
         ) : null
       }
@@ -317,6 +313,35 @@ export function ChangeDialog({ id, onClose }: { id: number | null; onClose: () =
 }
 
 // --- Files ---
+
+/** Downloads come from Canvas; a demo's files are only names, so there it explains instead. */
+function DownloadButton({ file }: { file: CourseFile }) {
+  const demo = useIsDemo();
+  const toast = useToast();
+  const label = (
+    <>
+      <DownloadIcon size={16} />
+      Download
+      <span className="visually-hidden"> {file.name}</span>
+    </>
+  );
+  if (demo) {
+    return (
+      <button
+        type="button"
+        className="button small secondary"
+        onClick={() => toast("Demo files are samples with nothing to download. In your own account this downloads from Canvas.", "info")}
+      >
+        {label}
+      </button>
+    );
+  }
+  return (
+    <a className="button small secondary" href={apiHref(file.download_url)} target="_blank" rel="noreferrer">
+      {label}
+    </a>
+  );
+}
 
 export function FileTable({ files, showCourse = true }: { files: CourseFile[]; showCourse?: boolean }) {
   return (
@@ -356,11 +381,7 @@ export function FileTable({ files, showCourse = true }: { files: CourseFile[]; s
               )}
             </td>
             <td className="file-action">
-              <a className="button small secondary" href={apiHref(file.download_url)} target="_blank" rel="noreferrer">
-                <DownloadIcon size={16} />
-                Download
-                <span className="visually-hidden"> {file.name}</span>
-              </a>
+              <DownloadButton file={file} />
             </td>
           </tr>
         ))}

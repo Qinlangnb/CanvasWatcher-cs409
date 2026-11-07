@@ -246,6 +246,24 @@ export function Spinner({ label, size = 18 }: { label?: string; size?: number })
   );
 }
 
+/** How many pages of a list to show: one more each time `more` is called, back to one when `key` (the filters) changes. */
+export function usePages(key: string): [number, () => void] {
+  const [state, setState] = useState({ key, pages: 1 });
+  const pages = state.key === key ? state.pages : 1;
+  return [pages, () => setState({ key, pages: pages + 1 })];
+}
+
+export function LoadMoreButton({ loading, onClick, children }: { loading: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <div className="load-more">
+      <button type="button" className="button secondary" onClick={onClick} disabled={loading}>
+        {loading ? <Spinner size={16} /> : null}
+        {loading ? "Loading…" : children}
+      </button>
+    </div>
+  );
+}
+
 export function EmptyState({
   icon,
   title,

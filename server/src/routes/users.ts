@@ -6,6 +6,7 @@ import { createSession, setSessionCookies } from "../auth/sessions.js";
 import { enforce } from "../auth/throttle.js";
 import type { Config } from "../config.js";
 import { isUniqueViolation, type Db } from "../db.js";
+import { demoForbidden, isDemo } from "../demo/accounts.js";
 import type { User } from "../generated/prisma/client.js";
 import { HttpError } from "../http/errors.js";
 
@@ -44,6 +45,8 @@ export function publicUser(user: User) {
     username: user.username,
     email: user.email,
     created_at: user.createdAt.toISOString(),
+    /** Set on demo accounts: when the account and its sample data are deleted. */
+    demo_expires_at: user.demoExpiresAt?.toISOString() ?? null,
   };
 }
 
@@ -84,6 +87,7 @@ export function usersRouter(db: Db, config: Config): Router {
 
   router.put("/me/password", requireUser, async (req, res) => {
     const auth = currentAuth(res.locals);
+    if (isDemo(auth.user)) throw demoForbidden("Demo accounts have no password. Create an account to keep your own data.");
     const body = passwordChange.parse(req.body ?? {});
     if (!(await verifyPassword(auth.user.passwordHash, body.current_password))) {
       throw new HttpError(400, "WRONG_PASSWORD", "Your current password is incorrect.");

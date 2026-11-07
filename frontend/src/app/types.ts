@@ -5,6 +5,13 @@ export interface User {
   username: string;
   email: string;
   created_at: string;
+  /** Set for demo accounts: when the account and its sample data are deleted. */
+  demo_expires_at: string | null;
+}
+
+export interface DemoAvailability {
+  enabled: boolean;
+  lifetime_days: number;
 }
 
 export interface CanvasConnection {
@@ -98,6 +105,12 @@ export interface CourseFile {
   size_bytes: number;
   updated_at: string | null;
   download_url: string;
+}
+
+export interface FilePage {
+  items: CourseFile[];
+  /** Pass back as `cursor` for the next page; null on the last page. */
+  next_cursor: string | null;
 }
 
 export type ChangeKind = "assignment" | "file" | "announcement";

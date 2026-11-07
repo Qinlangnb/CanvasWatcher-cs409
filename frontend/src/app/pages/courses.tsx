@@ -2,13 +2,14 @@ import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { isApiError } from "../api";
 import { plural } from "../format";
-import { BookIcon, ClipboardIcon, ExternalIcon, FolderIcon, PlusIcon } from "../icons";
+import { CanvasLink } from "../demo";
+import { BookIcon, ClipboardIcon, FolderIcon, PlusIcon } from "../icons";
 import { CourseCard, FileTable, GroupedTasks } from "../lists";
 import { useArchiveCourse, useCourse, useCourses, useFiles, useTasks } from "../queries";
 import { useNow } from "../shell";
 import { useTaskEditor } from "../tasks";
 import { useToast } from "../toast";
-import { Alert, EmptyState, PageHeader, QueryError, SkeletonList, Spinner } from "../ui";
+import { Alert, EmptyState, LoadMoreButton, PageHeader, QueryError, SkeletonList, Spinner, usePages } from "../ui";
 import { ChangeFeed, MarkAllReadButton } from "./changes";
 
 export function CoursesPage() {
@@ -141,17 +142,28 @@ function CourseTasks({ courseId, archived }: { courseId: number; archived: boole
 }
 
 function CourseFiles({ courseId }: { courseId: number }) {
-  const files = useFiles({ courseId });
+  const [pages, more] = usePages(String(courseId));
+  const files = useFiles({ courseId, pages });
   if (files.isPending) return <SkeletonList rows={4} label="Loading files" />;
   if (files.isError) return <Alert>{files.error.message}</Alert>;
-  if (files.data.length === 0) {
+  const { items, hasMore } = files.data;
+  if (items.length === 0) {
     return (
       <EmptyState icon={<FolderIcon size={28} />} title="No files">
         Files appear here when the course shares them in Canvas.
       </EmptyState>
     );
   }
-  return <FileTable files={files.data} showCourse={false} />;
+  return (
+    <>
+      <FileTable files={items} showCourse={false} />
+      {hasMore ? (
+        <LoadMoreButton loading={files.isPlaceholderData} onClick={more}>
+          Load more files
+        </LoadMoreButton>
+      ) : null}
+    </>
+  );
 }
 
 export function CourseDetailPage() {
@@ -201,11 +213,7 @@ export function CourseDetailPage() {
         description={`${plural(data.counts.open_tasks, "open task")} · ${plural(data.counts.files, "file")}`}
         actions={
           <>
-            <a className="button secondary" href={data.html_url} target="_blank" rel="noreferrer">
-              Open in Canvas
-              <ExternalIcon size={16} />
-              <span className="visually-hidden"> (opens in a new tab)</span>
-            </a>
+            <CanvasLink href={data.html_url} className="button secondary" />
             <button type="button" className="button ghost" onClick={toggleArchive} disabled={archive.isPending}>
               {archive.isPending ? <Spinner size={16} /> : null}
               {data.archived ? "Restore course" : "Archive course"}

@@ -3,7 +3,7 @@
 // outlive the row that started them.
 import { createContext, useContext, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { TASK_TYPE_LABELS, formatDue, formatMinutes, plural } from "./format";
-import { ExternalIcon } from "./icons";
+import { CanvasLink } from "./demo";
 import { TASK_TYPES, defaultMinutes, isSubmitted, parseEstimate, problemsOf, remainingOf, taskChanges, taskDraft, type TaskDraft, type TaskStatus } from "./forms";
 import { browserTimeZone, useCourses, useCreateTask, useDeleteTask, usePlanZone, useUpdateTask } from "./queries";
 import { useToast } from "./toast";
@@ -264,13 +264,7 @@ function TaskDialog({ task, open, onClose }: { task: Task; open: boolean; onClos
           {personal ? null : <span>{TASK_TYPE_LABELS[task.type] ?? task.type}</span>}
           {personal ? null : <span>{formatDue(task.due_at, new Date(), zone)}</span>}
           {task.points_possible !== null ? <span>{plural(task.points_possible, "pt")}</span> : null}
-          {task.html_url ? (
-            <a href={task.html_url} target="_blank" rel="noreferrer">
-              Open in Canvas
-              <ExternalIcon size={14} />
-              <span className="visually-hidden"> (opens in a new tab)</span>
-            </a>
-          ) : null}
+          {task.html_url ? <CanvasLink href={task.html_url} iconSize={14} /> : null}
         </p>
         <form id={formId} className="stack" onSubmit={submit} noValidate>
           {server.general ? <Alert>{server.general}</Alert> : null}

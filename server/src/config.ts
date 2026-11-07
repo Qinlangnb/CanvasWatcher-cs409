@@ -20,6 +20,8 @@ const environment = z.object({
   /** Number of reverse proxies in front of the API, used to find the client address. */
   TRUST_PROXY: z.coerce.number().int().min(0).default(0),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
+  /** Lets visitors start a demo account with sample data, for example for usability evaluations. */
+  DEMO_ACCOUNTS: z.enum(["true", "false"]).default("false"),
 });
 
 export interface Config {
@@ -34,6 +36,7 @@ export interface Config {
   secureCookies: boolean;
   trustProxy: number;
   logLevel: string;
+  demoAccounts: boolean;
 }
 
 function list(value: string): string[] {
@@ -65,5 +68,6 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
       : allowedOrigins.every((origin) => origin.startsWith("https://")),
     trustProxy: values.TRUST_PROXY,
     logLevel: values.LOG_LEVEL,
+    demoAccounts: values.DEMO_ACCOUNTS === "true",
   };
 }

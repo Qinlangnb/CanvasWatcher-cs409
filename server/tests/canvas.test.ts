@@ -165,7 +165,7 @@ describe("sync", () => {
     seedCourse(fakeCanvas);
     const ada = await signUp();
     await connectCanvas(ada);
-    const [file] = (await ada.send("get", "/api/files")).body;
+    const [file] = (await ada.send("get", "/api/files")).body.items;
     // What a changed CREDENTIALS_KEY looks like: the stored token no longer opens.
     await db.canvasConnection.updateMany({ data: { tokenCiphertext: "v1.AAAA.AAAA.AAAA" } });
 

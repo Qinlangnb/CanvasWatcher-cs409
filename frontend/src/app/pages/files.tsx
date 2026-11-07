@@ -3,7 +3,7 @@ import { plural } from "../format";
 import { FolderIcon, SearchIcon } from "../icons";
 import { FileTable } from "../lists";
 import { useCourses, useFiles } from "../queries";
-import { Alert, EmptyState, PageHeader, SkeletonList } from "../ui";
+import { Alert, EmptyState, LoadMoreButton, PageHeader, SkeletonList, usePages } from "../ui";
 
 function useDebounced<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -19,8 +19,13 @@ export function FilesPage() {
   const [courseId, setCourseId] = useState<number | undefined>();
   const q = useDebounced(text.trim(), 250);
   const courses = useCourses();
-  const files = useFiles({ courseId, q: q || undefined });
+  const [pages, more] = usePages(`${courseId ?? ""}|${q}`);
+  const files = useFiles({ courseId, q: q || undefined, pages });
   const filtered = Boolean(q || courseId);
+  const items = files.data?.items;
+  const hasMore = files.data?.hasMore ?? false;
+  // With more pages to load the total is unknown, so the count says how many are shown.
+  const count = items ? `${plural(items.length, "file")}${hasMore ? " shown" : filtered ? " found" : ""}` : null;
 
   return (
     <div className="page">
@@ -47,17 +52,22 @@ export function FilesPage() {
       <section className="card" aria-label="Files">
         {files.isPending ? <SkeletonList rows={5} label="Loading files" /> : null}
         {files.isError ? <Alert>{files.error.message}</Alert> : null}
-        {files.data ? (
+        {count ? (
           <p className="result-count" role="status">
-            {filtered ? `${plural(files.data.length, "file")} found` : plural(files.data.length, "file")}
+            {count}
           </p>
         ) : null}
-        {files.data?.length === 0 ? (
+        {items?.length === 0 ? (
           <EmptyState icon={<FolderIcon size={28} />} title={filtered ? "No matching files" : "No files yet"}>
             {filtered ? "Try a shorter name or another course." : "Files appear here when your courses share them in Canvas."}
           </EmptyState>
         ) : null}
-        {files.data && files.data.length > 0 ? <FileTable files={files.data} /> : null}
+        {items && items.length > 0 ? <FileTable files={items} /> : null}
+        {hasMore ? (
+          <LoadMoreButton loading={files.isPlaceholderData} onClick={more}>
+            Load more files
+          </LoadMoreButton>
+        ) : null}
       </section>
     </div>
   );

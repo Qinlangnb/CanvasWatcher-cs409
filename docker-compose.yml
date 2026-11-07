@@ -33,6 +33,9 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080}
       # Only nginx (the frontend service) can reach the API, so trust exactly one proxy hop.
       TRUST_PROXY: "1"
+      # The course deployment offers "Try a demo" on the sign-in page, so evaluators need no Canvas
+      # account. Each demo is a separate account with sample data, deleted on sign-out or after 7 days.
+      DEMO_ACCOUNTS: ${DEMO_ACCOUNTS:-true}
     expose:
       - "8000"
     depends_on:

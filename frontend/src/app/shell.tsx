@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router";
 import { isApiError } from "./api";
+import { DemoBanner } from "./demo";
 import { timeAgo } from "./format";
 import { BellIcon, BookIcon, CalendarIcon, FolderIcon, GearIcon, LogoMark, SunIcon, SyncIcon } from "./icons";
 import { useConnection, useMe, useSync, useUnreadCount } from "./queries";
@@ -207,6 +208,7 @@ export function AppShell() {
         </header>
 
         <main id="main" className="main" tabIndex={-1}>
+          <DemoBanner />
           {rejected ? (
             <div className="banner">
               <Alert

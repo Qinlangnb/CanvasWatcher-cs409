@@ -89,18 +89,73 @@ describe("files", () => {
     const ada = await signUp();
     await connectCanvas(ada);
     const files = await ada.send("get", "/api/files");
-    expect(files.body).toEqual([
-      expect.objectContaining({ name: "syllabus.pdf", content_type: "application/pdf", size_bytes: 12_345 }),
-    ]);
-    expect((await ada.send("get", "/api/files?q=SYLL")).body).toHaveLength(1);
-    expect((await ada.send("get", "/api/files?q=lecture")).body).toHaveLength(0);
+    expect(files.body).toEqual({
+      items: [expect.objectContaining({ name: "syllabus.pdf", content_type: "application/pdf", size_bytes: 12_345 })],
+      next_cursor: null,
+    });
+    expect((await ada.send("get", "/api/files?q=SYLL")).body.items).toHaveLength(1);
+    expect((await ada.send("get", "/api/files?q=lecture")).body.items).toHaveLength(0);
+  });
+
+  it("pages through files newest first, undated last, with a stable cursor", async () => {
+    seedCourse(fakeCanvas);
+    const ada = await signUp();
+    await connectCanvas(ada);
+    const course = await db.course.findFirstOrThrow();
+    const day = (n: number) => new Date(Date.UTC(2026, 9, n, 12));
+    // Ties on the update time and several undated files, so the id tie-break and the null case are both crossed.
+    const dates = [day(3), day(5), day(5), day(5), null, day(1), null, day(9), day(2), null, day(5)];
+    await db.courseFile.createMany({
+      data: dates.map((canvasUpdatedAt, index) => ({
+        userId: course.userId,
+        courseId: course.id,
+        canvasId: `extra-${index}`,
+        displayName: `Lecture ${index}.pdf`,
+        sizeBytes: 100,
+        canvasUpdatedAt,
+      })),
+    });
+    const all = await db.courseFile.findMany({ where: { removedAt: null } });
+    const expected = all
+      .sort((a, b) => {
+        const left = a.canvasUpdatedAt?.getTime() ?? -Infinity;
+        const right = b.canvasUpdatedAt?.getTime() ?? -Infinity;
+        return right - left || b.id - a.id;
+      })
+      .map((file) => file.id);
+
+    const seen: number[] = [];
+    let cursor: string | null = null;
+    let pages = 0;
+    do {
+      const res = await ada.send("get", `/api/files?limit=3${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+      expect(res.status).toBe(200);
+      expect(res.body.items.length).toBeLessThanOrEqual(3);
+      seen.push(...res.body.items.map((file: { id: number }) => file.id));
+      cursor = res.body.next_cursor;
+      pages += 1;
+    } while (cursor && pages < 10);
+    expect(seen).toEqual(expected);
+    expect(pages).toBe(Math.ceil(expected.length / 3));
+
+    const searched = await ada.send("get", "/api/files?q=lecture&limit=4");
+    expect(searched.body.items).toHaveLength(4);
+    const rest = await ada.send("get", `/api/files?q=lecture&limit=100&cursor=${encodeURIComponent(searched.body.next_cursor)}`);
+    expect(rest.body).toEqual({ items: expect.any(Array), next_cursor: null });
+    expect(rest.body.items).toHaveLength(dates.length - 4);
+
+    for (const bad of ["nonsense", Buffer.from('["yesterday", 1]').toString("base64url")]) {
+      const res = await ada.send("get", `/api/files?cursor=${bad}`);
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe("INVALID_QUERY");
+    }
   });
 
   it("redirects a download to a fresh Canvas link", async () => {
     seedCourse(fakeCanvas);
     const ada = await signUp();
     await connectCanvas(ada);
-    const [file] = (await ada.send("get", "/api/files")).body;
+    const [file] = (await ada.send("get", "/api/files")).body.items;
     const res = await ada.send("get", file.download_url);
     expect(res.status).toBe(302);
     expect(res.headers.location).toBe(`${CANVAS_ORIGIN}/files/10101/download?download_frd=1&verifier=fake`);
@@ -151,13 +206,13 @@ describe("isolation between users", () => {
     const ada = await adaWithChanges();
     const [course] = (await ada.send("get", "/api/courses")).body;
     const [change] = (await ada.send("get", "/api/changes?limit=1")).body.items;
-    const [file] = (await ada.send("get", "/api/files")).body;
+    const [file] = (await ada.send("get", "/api/files")).body.items;
     const { id: runId } = (await ada.send("get", "/api/sync/runs/latest")).body;
 
     const bob = await signUp({ username: "bob", email: "bob@example.com" });
     expect((await bob.send("get", "/api/courses")).body).toEqual([]);
     expect((await bob.send("get", "/api/tasks")).body).toEqual([]);
-    expect((await bob.send("get", "/api/files")).body).toEqual([]);
+    expect((await bob.send("get", "/api/files")).body.items).toEqual([]);
     expect((await bob.send("get", "/api/changes")).body.items).toEqual([]);
     expect((await bob.send("get", `/api/courses/${course.id}`)).status).toBe(404);
     expect((await bob.send("get", `/api/tasks?course_id=${course.id}`)).body).toEqual([]);

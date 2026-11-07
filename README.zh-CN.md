@@ -18,6 +18,8 @@ CanvasWatcher 从 Canvas 和受支持的课程网站汇集资料、截止日期�
 | Canvas 连接、手动与定时同步 | 已完成（第 2 周），用假的 Canvas 服务器测试 |
 | 课程、任务、文件、变动（只读、标记已读、归档） | 已完成（第 2 周） |
 | Today 计划、Timeline、日历（.ics 导入、自建事件）、学习设置、任务编辑 | 已完成（第 3 周），有测试 |
+| 演示账号、变动列表索引、文件分页 | 已完成（第 4 周），有测试；改动前后的查询实测见 [performance.md](docs/cs409/performance.md) |
+| 启发式评估 | 第 1 轮材料已备好，见 [heuristic-evaluation.md](docs/cs409/heuristic-evaluation.md)；尚未进行 |
 | 前端 | 在 `frontend/src/app` 用 React Router 重写：登录、注册、引导、Today、日历（周视图与 Timeline）、课程、变动、文件、设置；旧界面已在第 3 周删除 |
 
 ### API
@@ -29,7 +31,10 @@ CanvasWatcher 从 Canvas 和受支持的课程网站汇集资料、截止日期�
 | `GET /api/users/me` | 当前登录用户 | 200 |
 | `PUT /api/users/me/password` | 修改密码，并登出其他设备 | 204 |
 | `POST /api/sessions` | 用用户名或邮箱登录 | 201 |
-| `DELETE /api/sessions/current` | 登出当前浏览器 | 204 |
+| `DELETE /api/sessions/current` | 登出当前浏览器（演示账号登出即删除） | 204 |
+| `GET /api/demo` | 本服务器是否提供演示账号 | 200 |
+| `POST /api/demo` | 仅限未登录：新建带示例数据的演示账号并登录（同一网络每小时 10 个） | 201 |
+| `POST /api/demo/reset` | 仅限演示账号：恢复示例数据 | 204 |
 | `GET /api/canvas/connection` | Canvas 站点、账号、状态与上次同步时间 | 200 |
 | `PUT /api/canvas/connection` | 验证 Canvas access token，加密保存，开始首次同步 | 200 |
 | `DELETE /api/canvas/connection` | 删除 token 与所有已同步数据 | 204 |
@@ -46,11 +51,21 @@ CanvasWatcher 从 Canvas 和受支持的课程网站汇集资料、截止日期�
 | `POST /api/calendar/events`、`PATCH /api/calendar/events/{id}`、`DELETE /api/calendar/events/{id}` | 新建、修改、删除自建事件；忙碌事件会从计划里扣除时间 | 201、200、204 |
 | `GET /api/calendar/sources`、`POST /api/calendar/sources`、`DELETE /api/calendar/sources/{id}` | 导入的 .ics 日历：列表、导入（最大 1.5 MB，最多 20 个）、连同事件一起删除 | 200、201、204 |
 | `GET /api/settings`、`PATCH /api/settings` | 时区、每日学习目标与学习时段 | 200 |
-| `GET /api/files[?course_id=&q=]` | 文件元数据，最新在前 | 200 |
+| `GET /api/files[?course_id=&q=&limit=&cursor=]` | 文件元数据，最新在前；返回 `{ items, next_cursor }`，默认每页 50 个 | 200 |
 | `GET /api/files/{id}/download` | 302 跳转到 Canvas 新生成的下载链接 | 302 |
 | `GET /api/changes[?course_id=&unread=&limit=&before=]` | 变动列表，最新在前，游标分页 | 200 |
 | `GET /api/changes/unread-count`、`POST /api/changes/mark-all-read` | 未读数；全部（或某门课）标为已读 | 200 |
 | `GET /api/changes/{id}`、`PATCH /api/changes/{id}` | 单条变动及前后值；设置 `read` | 200 |
+
+**演示账号**让没有 Canvas token 的人（例如启发式评估的评估者）也能试用。只有 `DEMO_ACCOUNTS=true` 时开启，`docker-compose.yml` 默认开启。
+
+- 每点一次“Try a demo”就新建一个独立账号，没有密码，带有以当天为基准的示例课程、任务、文件、变动和日历事件。
+- 用户结束演示时删除账号，否则 7 天后删除。
+- 演示账号从不访问 Canvas：
+  - 同步立即完成。
+  - 下载返回 409 `DEMO_FILE`。
+  - 连接 Canvas、修改密码返回 403 `DEMO_ACCOUNT`。
+  - 定时同步跳过演示账号。
 
 默认只允许连接 `canvas.illinois.edu` 与 `*.instructure.com`（`CANVAS_ALLOWED_HOSTS`）。连接期间每个账号每 `SYNC_INTERVAL_MINUTES`（默认 30）分钟自动同步一次；Canvas 拒绝 token 后停止自动同步，直到用户重新连接。
 
@@ -88,6 +103,7 @@ npm run dev                      # API 运行在 http://localhost:8000，保存�
 | `npm run typecheck` | 检查源码与测试的类型 |
 | `npm run build` | 编译到 `dist/` |
 | `npm run db:migrate -- --name <变更名>` | 修改 `prisma/schema.prisma` 后生成迁移 |
+| `npm run bench -- [--out results.json]` | 在临时库 `canvaswatcher_bench` 中生成大量合成数据，测量请求耗时并输出 `EXPLAIN ANALYZE` 执行计划（见 [performance.md](docs/cs409/performance.md)） |
 
 CI（`.github/workflows/ci.yml`）会在 PostgreSQL 服务上运行后端检查，并运行前端测试与构建。
 
@@ -95,9 +111,9 @@ CI（`.github/workflows/ci.yml`）会在 PostgreSQL 服务上运行后端检查�
 
 | 路径 | 用途 |
 | --- | --- |
-| `server/` | Node.js REST API：Express 路由、Prisma 数据模型与迁移、测试 |
-| `frontend/src/app/` | React 界面：`router.tsx`（路由与登录守卫）、`pages/`、公共组件 `ui.tsx`、`queries.ts`（React Query hooks）、`tasks.tsx` 与 `events.tsx`（编辑器）、`forms.ts` 与 `zoned.ts`（表单与时区的纯函数，有单元测试）、`app.css`（设计 token，深浅色） |
-| `docs/cs409/` | 重写方案与课程交付文档 |
+| `server/` | Node.js REST API：Express 路由、Prisma 数据模型与迁移、演示账号（`src/demo/`）、测试、查询基准（`bench/`） |
+| `frontend/src/app/` | React 界面：`router.tsx`（路由与登录守卫）、`pages/`、公共组件 `ui.tsx`、`queries.ts`（React Query hooks）、`tasks.tsx` 与 `events.tsx`（编辑器）、`demo.tsx`（演示入口、横幅与对话框）、`forms.ts` 与 `zoned.ts`（表单与时区的纯函数，有单元测试）、`app.css`（设计 token，深浅色） |
+| `docs/cs409/` | 重写方案、性能实测、启发式评估材料 |
 | `legacy/` | 原 Python 后端、网关与部署文件，仅作移植对照 |
 
 ## 许可

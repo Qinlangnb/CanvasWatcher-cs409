@@ -23,6 +23,7 @@ export const config = loadConfig({
   CANVAS_ALLOWED_HOSTS: new URL(CANVAS_ORIGIN).hostname,
   SYNC_INTERVAL_MINUTES: "0",
   LOG_LEVEL: "silent",
+  DEMO_ACCOUNTS: "true",
 });
 export const db = createDb(config.databaseUrl);
 const logger = pino({ level: "silent" });

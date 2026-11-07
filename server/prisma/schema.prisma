@@ -14,28 +14,31 @@ datasource db {
 }
 
 model User {
-  id           String            @id @default(uuid()) @db.Uuid
+  id            String            @id @default(uuid()) @db.Uuid
   /// Display form, as the user typed it.
-  username     String
+  username      String
   /// Lower-cased username; makes sign-in and uniqueness case-insensitive.
-  usernameKey  String            @unique @map("username_key")
+  usernameKey   String            @unique @map("username_key")
   /// Stored lower-cased.
-  email        String            @unique
-  passwordHash String            @map("password_hash")
-  createdAt    DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt    DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
-  sessions     Session[]
-  canvas       CanvasConnection?
-  syncRuns     SyncRun[]
-  courses      Course[]
-  tasks        Task[]
-  files        CourseFile[]
-  sourceItems  SourceItem[]
-  changes      ChangeEvent[]
-  settings     UserSettings?
-  calendars    CalendarSource[]
-  events       CalendarEvent[]
+  email         String            @unique
+  passwordHash  String            @map("password_hash")
+  /// Set on demo accounts, which are deleted at this time. Demo accounts have no usable password.
+  demoExpiresAt DateTime?         @map("demo_expires_at") @db.Timestamptz(3)
+  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  sessions      Session[]
+  canvas        CanvasConnection?
+  syncRuns      SyncRun[]
+  courses       Course[]
+  tasks         Task[]
+  files         CourseFile[]
+  sourceItems   SourceItem[]
+  changes       ChangeEvent[]
+  settings      UserSettings?
+  calendars     CalendarSource[]
+  events        CalendarEvent[]
 
+  @@index([demoExpiresAt])
   @@map("users")
 }
 
@@ -279,9 +282,10 @@ model ChangeEvent {
   detectedAt   DateTime   @default(now()) @map("detected_at") @db.Timestamptz(3)
   readAt       DateTime?  @map("read_at") @db.Timestamptz(3)
 
-  @@index([userId, detectedAt])
+  /// The feed is newest first by id (ids grow with detection time), paged with an id cursor.
+  @@index([userId, id])
   @@index([userId, readAt])
-  @@index([courseId, detectedAt])
+  @@index([courseId, id])
   @@map("change_events")
 }
 

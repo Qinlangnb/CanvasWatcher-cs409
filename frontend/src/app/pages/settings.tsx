@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation } from "react-router";
 import { ApiError } from "../api";
 import { ConnectCanvasForm } from "../canvas";
+import { EndDemoDialog } from "../demo";
 import { ImportCalendarDialog } from "../events";
 import { formatDateTime, formatMinuteOfDay, formatMinutes, plural, timeAgo } from "../format";
 import { SyncIcon, UploadIcon } from "../icons";
@@ -12,6 +13,7 @@ import {
   useConnection,
   useDeleteCalendarSource,
   useDisconnectCanvas,
+  useIsDemo,
   useMe,
   useSettings,
   useSignOut,
@@ -26,7 +28,9 @@ import { Alert, Badge, Dialog, PageHeader, PasswordField, QueryError, SelectFiel
 function ProfileSection() {
   const me = useMe();
   const signOut = useSignOut();
+  const [ending, setEnding] = useState(false);
   if (!me.data) return null;
+  const demoExpires = me.data.demo_expires_at;
   return (
     <section className="card settings-section" aria-labelledby="profile-heading">
       <h2 id="profile-heading">Profile</h2>
@@ -35,20 +39,36 @@ function ProfileSection() {
           <dt>Username</dt>
           <dd>{me.data.username}</dd>
         </div>
+        {demoExpires ? (
+          <div>
+            <dt>Account</dt>
+            <dd>
+              <Badge tone="accent">Demo</Badge> Deleted on {formatDateTime(demoExpires)}
+            </dd>
+          </div>
+        ) : (
+          <div>
+            <dt>Email</dt>
+            <dd>{me.data.email}</dd>
+          </div>
+        )}
         <div>
-          <dt>Email</dt>
-          <dd>{me.data.email}</dd>
-        </div>
-        <div>
-          <dt>Member since</dt>
+          <dt>{demoExpires ? "Started" : "Member since"}</dt>
           <dd>{formatDateTime(me.data.created_at)}</dd>
         </div>
       </dl>
       <div className="form-actions">
-        <button type="button" className="button secondary" onClick={() => signOut.mutate()} disabled={signOut.isPending}>
-          Sign out
-        </button>
+        {demoExpires ? (
+          <button type="button" className="button secondary" onClick={() => setEnding(true)}>
+            End demo
+          </button>
+        ) : (
+          <button type="button" className="button secondary" onClick={() => signOut.mutate()} disabled={signOut.isPending}>
+            Sign out
+          </button>
+        )}
       </div>
+      <EndDemoDialog open={ending} onClose={() => setEnding(false)} />
     </section>
   );
 }
@@ -57,6 +77,7 @@ function CanvasSection() {
   const connection = useConnection();
   const sync = useSync();
   const disconnect = useDisconnectCanvas();
+  const demo = useIsDemo();
   const toast = useToast();
   const now = useNow(30_000);
   const location = useLocation();
@@ -101,7 +122,14 @@ function CanvasSection() {
           </dd>
         </div>
       </dl>
-      <p className="muted">While you are connected, CanvasWatcher also checks Canvas for changes on its own.</p>
+      {demo ? (
+        <Alert tone="info" title="This demo isn't connected to a real Canvas">
+          The courses, tasks, files and changes are sample data. Sync now finishes at once and finds nothing new. Create an account
+          to connect your own Canvas with an access token.
+        </Alert>
+      ) : (
+        <p className="muted">While you are connected, CanvasWatcher also checks Canvas for changes on its own.</p>
+      )}
 
       {replacing ? (
         <div className="subsection">
@@ -131,12 +159,16 @@ function CanvasSection() {
             <SyncIcon size={18} className={sync.running ? "spin" : undefined} />
             {sync.running ? "Syncing…" : "Sync now"}
           </button>
-          <button type="button" className="button secondary" onClick={() => setReplacing(true)}>
-            Replace token
-          </button>
-          <button type="button" className="button danger-ghost" onClick={() => setConfirming(true)}>
-            Disconnect
-          </button>
+          {demo ? null : (
+            <>
+              <button type="button" className="button secondary" onClick={() => setReplacing(true)}>
+                Replace token
+              </button>
+              <button type="button" className="button danger-ghost" onClick={() => setConfirming(true)}>
+                Disconnect
+              </button>
+            </>
+          )}
         </div>
       )}
 
@@ -476,6 +508,7 @@ function PasswordSection() {
 
 export function SettingsPage() {
   const location = useLocation();
+  const demo = useIsDemo();
   useEffect(() => {
     // #canvas is handled by its section, which may first open the token form.
     if (location.hash && location.hash !== "#canvas") document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: "start" });
@@ -488,7 +521,7 @@ export function SettingsPage() {
         <CalendarsSection />
         <CanvasSection />
         <ProfileSection />
-        <PasswordSection />
+        {demo ? null : <PasswordSection />}
       </div>
     </div>
   );

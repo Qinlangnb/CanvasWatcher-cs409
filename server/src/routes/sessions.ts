@@ -6,6 +6,7 @@ import { clearSessionCookies, createSession, revokeSession, setSessionCookies } 
 import { clearAttempts, enforce } from "../auth/throttle.js";
 import type { Config } from "../config.js";
 import type { Db } from "../db.js";
+import { isDemo } from "../demo/accounts.js";
 import { HttpError } from "../http/errors.js";
 import { publicUser } from "./users.js";
 
@@ -45,8 +46,11 @@ export function sessionsRouter(db: Db, config: Config): Router {
     res.status(201).json(publicUser(user));
   });
 
+  /** Signs out. Signing out of a demo ends it: the demo account and its sample data are deleted. */
   router.delete("/current", requireUser, async (_req, res) => {
-    await revokeSession(db, currentAuth(res.locals).sessionId);
+    const auth = currentAuth(res.locals);
+    if (isDemo(auth.user)) await db.user.deleteMany({ where: { id: auth.user.id } });
+    else await revokeSession(db, auth.sessionId);
     clearSessionCookies(res, config);
     res.status(204).end();
   });

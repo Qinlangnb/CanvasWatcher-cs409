@@ -47,6 +47,7 @@ describe("POST /api/users (sign up)", () => {
       username: "Ada",
       email: "ada@example.com",
       created_at: expect.any(String),
+      demo_expires_at: null,
     });
     expect(cookieLine(res, "aw_session")).toMatch(/HttpOnly/i);
     expect(cookieLine(res, "aw_session")).toMatch(/SameSite=Lax/i);

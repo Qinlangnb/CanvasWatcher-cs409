@@ -129,6 +129,8 @@ export class SyncService {
     const due = await this.db.canvasConnection.findMany({
       where: {
         status: "OK",
+        // Demo accounts have no Canvas to sync with.
+        user: { demoExpiresAt: null },
         OR: [{ lastSyncedAt: null }, { lastSyncedAt: { lt: new Date(now.getTime() - intervalMs) } }],
         AND: [{ OR: [{ syncLeaseUntil: null }, { syncLeaseUntil: { lt: now } }] }],
       },

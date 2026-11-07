@@ -11,7 +11,9 @@ import type {
   ChangePage,
   Course,
   CourseFile,
+  DemoAvailability,
   EventFields,
+  FilePage,
   NewTask,
   PlanSettings,
   SyncRun,
@@ -72,6 +74,11 @@ export function useMe() {
   });
 }
 
+/** True while a demo account is signed in. */
+export function useIsDemo(): boolean {
+  return Boolean(useMe().data?.demo_expires_at);
+}
+
 /**
  * Records who is signed in and drops everything cached for the previous account. Keeps the `me` query
  * itself: `clear()` would detach the components already watching it, and they would never see the change.
@@ -121,6 +128,39 @@ export function useSignOut() {
   return useMutation({
     mutationFn: () => request<void>("/api/sessions/current", { method: "DELETE" }),
     onSettled: () => setAccount(client, null),
+  });
+}
+
+// --- Demo accounts ---
+
+/** Whether this server offers demo accounts; any failure reads as "no". */
+export function useDemoAvailability() {
+  return useQuery({
+    queryKey: ["demo"],
+    queryFn: () => request<DemoAvailability>("/api/demo").catch(() => ({ enabled: false, lifetime_days: 0 })),
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
+/** Creates a demo account with sample data and signs in to it. */
+export function useStartDemo() {
+  const signedIn = useSignedIn();
+  return useMutation({
+    mutationFn: () => request<User>("/api/demo", { method: "POST" }),
+    onSuccess: signedIn,
+  });
+}
+
+/**
+ * Puts the demo's sample data back; every list is fetched again. Invalidated rather than reset, so the
+ * shell keeps its data meanwhile instead of unmounting into a loader.
+ */
+export function useResetDemo() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: () => request<void>("/api/demo/reset", { method: "POST" }),
+    onSuccess: () => client.invalidateQueries({ predicate: (query) => query.queryKey[0] !== keys.me[0] }),
   });
 }
 
@@ -204,8 +244,11 @@ export function useSync(onFinished?: (run: SyncRun) => void) {
     const run = latest.data;
     const before = previous.current;
     previous.current = run;
-    if (!finished.current) return;
-    if (run && before?.id === run.id && before.status === "running" && run.status !== "running") {
+    if (!finished.current || !run || run.status === "running") return;
+    const sawItRun = before?.id === run.id && before.status === "running";
+    // A manual sync that was already over when it arrived, such as a demo account's instant one.
+    const arrivedFinished = before !== undefined && before?.id !== run.id && run.trigger === "manual";
+    if (sawItRun || arrivedFinished) {
       invalidateCanvasData(client);
       finished.current?.(run);
     }
@@ -304,10 +347,26 @@ export function useDeleteTask() {
   });
 }
 
-export function useFiles(params: { courseId?: number; q?: string }) {
+export const FILE_PAGE_SIZE = 50;
+
+/** Files newest first, `pages` pages of them, like `useChanges`. */
+export function useFiles(params: { courseId?: number; q?: string; pages: number }) {
+  const { pages, ...filters } = params;
   return useQuery({
-    queryKey: keys.files(params),
-    queryFn: () => request<CourseFile[]>(query("/api/files", { course_id: params.courseId, q: params.q })),
+    queryKey: [...keys.files(filters), pages],
+    queryFn: async () => {
+      const items: CourseFile[] = [];
+      let cursor: string | null | undefined;
+      for (let page = 0; page < pages; page += 1) {
+        const result: FilePage = await request(
+          query("/api/files", { course_id: filters.courseId, q: filters.q, limit: FILE_PAGE_SIZE, cursor: cursor ?? undefined }),
+        );
+        items.push(...result.items);
+        cursor = result.next_cursor;
+        if (cursor === null) break;
+      }
+      return { items, hasMore: cursor !== null };
+    },
     placeholderData: (previousData) => previousData,
   });
 }
