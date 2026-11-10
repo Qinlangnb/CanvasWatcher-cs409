@@ -22,7 +22,7 @@ import { useChange, useIsDemo, useMarkRead, usePlanZone } from "./queries";
 import { TaskCheck, useTaskEditor } from "./tasks";
 import { useToast } from "./toast";
 import type { Change, ChangeKind, ContentValue, Course, CourseFile, Task } from "./types";
-import { Alert, Badge, Dialog, SkeletonList } from "./ui";
+import { Badge, Dialog, QueryError, SkeletonList } from "./ui";
 
 // --- Courses ---
 
@@ -62,13 +62,28 @@ function doneLabel(task: Task): string {
   return "Submitted";
 }
 
-export function TaskRow({ task, now, showCourse = true, extra }: { task: Task; now: Date; showCourse?: boolean; extra?: ReactNode }) {
+export function TaskRow({
+  task,
+  now,
+  showCourse = true,
+  extra,
+  showHint = true,
+  anchorId,
+}: {
+  task: Task;
+  now: Date;
+  showCourse?: boolean;
+  extra?: ReactNode;
+  /** False when `extra` already says how urgent the task is. */
+  showHint?: boolean;
+  anchorId?: string;
+}) {
   const zone = usePlanZone();
   const editor = useTaskEditor();
   const open = task.state === "open" || task.state === "overdue";
-  const hint = open ? dueHint(task.due_at, now, zone) : null;
+  const hint = open && showHint ? dueHint(task.due_at, now, zone) : null;
   return (
-    <li className={`task-row state-${task.state}`}>
+    <li id={anchorId} className={`task-row state-${task.state}`}>
       <span className={`task-marker type-${task.type}`} aria-hidden="true" />
       <TaskCheck task={task} />
       <div className="task-main">
@@ -229,7 +244,7 @@ export function ChangeDialog({ id, onClose }: { id: number | null; onClose: () =
   }, [detail?.id]);
 
   let body: ReactNode = <SkeletonList rows={2} label="Loading change" />;
-  if (change.isError) body = <Alert>{change.error.message}</Alert>;
+  if (change.isError) body = <QueryError error={change.error} retry={() => change.refetch()} />;
   if (detail) {
     const fields =
       detail.change_type === "updated" ? detail.fields : Object.keys((detail.change_type === "removed" ? detail.before : detail.after) ?? {});

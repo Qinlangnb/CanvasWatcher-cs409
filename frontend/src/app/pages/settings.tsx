@@ -4,7 +4,7 @@ import { ApiError } from "../api";
 import { ConnectCanvasForm } from "../canvas";
 import { EndDemoDialog } from "../demo";
 import { ImportCalendarDialog } from "../events";
-import { formatDateTime, formatMinuteOfDay, formatMinutes, plural, timeAgo } from "../format";
+import { formatDateTime, formatMinuteOfDay, formatMinutes, plural, syncOutcome, timeAgo } from "../format";
 import { SyncIcon, UploadIcon } from "../icons";
 import {
   browserTimeZone,
@@ -92,6 +92,7 @@ function CanvasSection() {
 
   const data = connection.data;
   if (!data) return null;
+  const last = sync.run && sync.run.status !== "running" ? syncOutcome(sync.run) : null;
 
   return (
     <section className="card settings-section" id="canvas" aria-labelledby="canvas-heading">
@@ -121,7 +122,27 @@ function CanvasSection() {
             )}
           </dd>
         </div>
+        {last && sync.run ? (
+          <div>
+            <dt>Latest sync</dt>
+            <dd className="last-run">
+              <Badge tone={last.tone}>{last.label}</Badge>
+              <span>
+                {sync.run.trigger === "scheduled" ? "Automatic" : "Started by you"},{" "}
+                <time dateTime={sync.run.finished_at ?? sync.run.started_at} title={formatDateTime(sync.run.finished_at ?? sync.run.started_at)}>
+                  {timeAgo(sync.run.finished_at ?? sync.run.started_at, now)}
+                </time>
+                : {plural(sync.run.courses_synced, "course")} checked, {last.detail.toLowerCase().startsWith("nothing") ? "nothing new" : plural(sync.run.changes_detected, "change")}
+              </span>
+            </dd>
+          </div>
+        ) : null}
       </dl>
+      {last && last.tone !== "success" && sync.run?.error ? (
+        <Alert tone={last.tone === "danger" ? "error" : "warning"} title={last.label}>
+          {sync.run.error}
+        </Alert>
+      ) : null}
       {demo ? (
         <Alert tone="info" title="This demo isn't connected to a real Canvas">
           The courses, tasks, files and changes are sample data. Sync now finishes at once and finds nothing new. Create an account

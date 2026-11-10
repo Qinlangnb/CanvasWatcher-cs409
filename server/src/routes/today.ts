@@ -3,11 +3,14 @@ import { DateTime } from "luxon";
 import { currentAuth } from "../auth/middleware.js";
 import { dateOf, eventsBetween, presentEvent } from "../calendar/events.js";
 import type { Db } from "../db.js";
+import { remainingMinutes } from "../tasks/effort.js";
 import { HORIZON_DAYS, OVERDUE_LOOKBACK_DAYS, buildPlan } from "../today/plan.js";
 import { openTaskWhere, presentTask, taskInclude } from "./present.js";
 import { getSettings } from "./settings.js";
 
 const DAY_MS = 86_400_000;
+/** "Due next week" runs from now through the end of the 7th local day after today. */
+export const UPCOMING_DAYS = 7;
 
 export function todayRouter(db: Db): Router {
   const router = Router();
@@ -56,6 +59,11 @@ export function todayRouter(db: Db): Router {
       busy: events.filter((event) => event.busy && !event.allDay).map((event) => ({ start: event.startAt, end: event.endAt })),
     });
     const byId = new Map(tasks.map((task) => [task.id, task]));
+    const planned = new Map(plan.items.map((item) => [item.taskId, item]));
+    const upcomingEnd = today.plus({ days: UPCOMING_DAYS + 1 }).toJSDate();
+    const upcoming = tasks
+      .filter((task) => task.dueAt !== null && task.dueAt >= now && task.dueAt < upcomingEnd)
+      .sort((a, b) => (a.dueAt as Date).getTime() - (b.dueAt as Date).getTime() || a.id - b.id);
     const date = plan.date;
     const todaysEvents = events.filter((event) =>
       event.allDay
@@ -80,6 +88,17 @@ export function todayRouter(db: Db): Router {
         slack_minutes: item.slackMinutes,
         reasons: item.reasons,
       })),
+      // Open work due soon, planned or not, so the student can start on it before the plan gets there.
+      upcoming: upcoming.map((task) => {
+        const item = planned.get(task.id);
+        return {
+          task: presentTask(task, now),
+          remaining_minutes: item?.remainingMinutes ?? remainingMinutes(task),
+          planned_minutes: item?.plannedMinutes ?? 0,
+          reasons: item?.reasons ?? [],
+        };
+      }),
+      upcoming_through: new Date(upcomingEnd.getTime() - 1).toISOString(),
       done_today: doneToday.map((task) => presentTask(task, now)),
       events: todaysEvents.map(presentEvent),
     });

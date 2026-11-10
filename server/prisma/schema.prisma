@@ -196,6 +196,9 @@ model Task {
   progress         Int        @default(0)
   /// The student's estimate of the total work; null means "use the default for the task type".
   estimatedMinutes Int?       @map("estimated_minutes")
+  /// Local date (YYYY-MM-DD) the student started this task before the plan reached it. That day's plan
+  /// includes it; on later days the planner decides on its own again.
+  startedOn        String?    @map("started_on") @db.VarChar(10)
   notes            String?
   createdAt        DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)

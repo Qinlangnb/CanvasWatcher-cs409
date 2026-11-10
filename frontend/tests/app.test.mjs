@@ -199,3 +199,48 @@ test("touch targets for buttons and inputs are at least 44px", () => {
   assert.equal(minHeight(".button"), "44px");
   assert.equal(minHeight(".input-box input"), "44px");
 });
+
+// --- Today: due next week, and sync results ---
+
+test("due next week is a compact list under today's plan whose rows open into the plan's task row", () => {
+  const today = read("app/pages/today.tsx");
+  assert.match(today, /<PlanSection plan=\{plan\} now=\{now\} \/> : null\}\s*\{plan \? <DueNextWeek plan=\{plan\} now=\{now\} \/> : null\}/);
+  // One button per line; a planned task jumps to its row in the plan instead of opening a second copy.
+  assert.match(today, /className="due-soon-row"\s+onClick=\{inPlan \? \(\) => showPlanRow\(task\.id\) : onToggle\}/);
+  assert.match(today, /aria-expanded=\{inPlan \? undefined : open\}/);
+  assert.match(today, /<TaskRow task=\{task\} now=\{now\} extra=\{<StartEarly item=\{item\} \/>\} \/>/);
+  assert.match(today, /changes: \{ start_today: start \}/);
+  assert.match(today, /prefers-reduced-motion: reduce/);
+});
+
+test("the due list fits a phone: rows shrink, titles wrap and nothing sets a fixed width", () => {
+  const declsOf = (selector, inMedia) => {
+    const found = {};
+    css.walkRules((rule) => {
+      const media = rule.parent.type === "atrule" ? rule.parent.params : null;
+      if (media === inMedia && rule.selectors.includes(selector)) rule.walkDecls((decl) => (found[decl.prop] = decl.value));
+    });
+    return found;
+  };
+  assert.equal(declsOf(".due-soon-list", null)["grid-template-columns"], "minmax(0, 1fr)");
+  assert.equal(declsOf(".due-soon-item", null)["min-width"], "0");
+  assert.equal(declsOf(".due-soon-main", null)["min-width"], "0");
+  const phone = declsOf(".due-soon-row", "(max-width: 639px)");
+  assert.equal(phone["grid-template-columns"], "max-content minmax(0, 1fr) 20px");
+  assert.equal(declsOf(".due-soon-title", "(max-width: 639px)")["white-space"], "normal");
+});
+
+test("sync shows its result: a toast, the button, the status line and a dot on the phone icon", () => {
+  const shell = read("app/shell.tsx");
+  assert.match(shell, /useSync\(compact \? undefined : \(run\) => report\(syncOutcome\(run\)\)\)/);
+  // A request that never started a sync is a failure too.
+  assert.match(shell, /onError: \(error\) => report\(\{ label: "Sync failed", detail: error\.message, tone: "danger" \}\)/);
+  assert.match(shell, /setTimeout\(\(\) => setResult\(null\), RESULT_MS\)/);
+  assert.match(shell, /dot === "warn" \|\| dot === "bad" \? <span className=\{`status-dot \$\{dot\}`\}/);
+  assert.match(read("app/toast.tsx"), /toast\.tone === "success" \? <CheckIcon size=\{18\} \/> : <AlertIcon size=\{18\} \/>/);
+  const settings = read("app/pages/settings.tsx");
+  assert.match(settings, /<dt>Latest sync<\/dt>/);
+  let warnDot = false;
+  css.walkRules(".status-dot.warn", () => (warnDot = true));
+  assert.ok(warnDot, "partial syncs have their own dot colour");
+});

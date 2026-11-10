@@ -78,6 +78,15 @@ export function dueHint(
   return null;
 }
 
+/** "Today", "Tomorrow" or "Wed, Nov 11": the local day something is due, for lists grouped by day. */
+export function dueDayLabel(iso: string, now = new Date(), zone?: string): string {
+  const date = new Date(iso);
+  const offset = dayOffset(date, now, zone);
+  if (offset === 0) return "Today";
+  if (offset === 1) return "Tomorrow";
+  return formatter({ weekday: "short", month: "short", day: "numeric" }, zone).format(date);
+}
+
 /** "just now", "5 minutes ago", "yesterday", "3 days ago". */
 export function timeAgo(iso: string | null, now = new Date()): string {
   if (!iso) return "never";
@@ -174,11 +183,26 @@ export const TASK_TYPE_LABELS: Record<string, string> = {
   other: "Other",
 };
 
+export interface SyncOutcome {
+  label: string;
+  detail: string;
+  tone: "success" | "warning" | "danger";
+}
+
+/** What a finished sync did: for the sidebar status, the Sync button and the toast. */
+export function syncOutcome(run: { status: string; changes_detected: number; error: string | null }): SyncOutcome {
+  const found = run.changes_detected === 0 ? "Nothing new" : `${plural(run.changes_detected, "change")} found`;
+  if (run.status === "succeeded") return { label: "Sync finished", detail: found, tone: "success" };
+  if (run.status === "partial") return { label: "Sync finished with gaps", detail: run.error ?? found, tone: "warning" };
+  return { label: "Sync failed", detail: run.error ?? "Canvas could not be reached. Try again in a moment.", tone: "danger" };
+}
+
 /** Why the Today plan picked a task, as a short badge. */
 export const REASON_LABELS = {
   overdue: { label: "Overdue", tone: "danger" },
   due_today: { label: "Due today", tone: "warning" },
   low_slack: { label: "Running out of time", tone: "warning" },
   quick_finish: { label: "Quick finish", tone: "success" },
+  started: { label: "Started early", tone: "accent" },
   get_ahead: { label: "Get ahead", tone: "accent" },
 } as const;

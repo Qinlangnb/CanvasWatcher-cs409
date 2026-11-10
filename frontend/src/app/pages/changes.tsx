@@ -6,7 +6,7 @@ import { ChangeDialog, ChangeList } from "../lists";
 import { useChanges, useCourses, useMarkAllRead, useUnreadCount } from "../queries";
 import { useNow } from "../shell";
 import { useToast } from "../toast";
-import { Alert, EmptyState, PageHeader, SkeletonList, Spinner } from "../ui";
+import { EmptyState, PageHeader, QueryError, SkeletonList, Spinner } from "../ui";
 
 /** Changes newest first, loaded a page at a time, with the detail dialog. */
 export function ChangeFeed({ courseId, unread = false }: { courseId?: number; unread?: boolean }) {
@@ -18,7 +18,7 @@ export function ChangeFeed({ courseId, unread = false }: { courseId?: number; un
   useEffect(() => setPages(1), [courseId, unread]);
 
   if (changes.isPending) return <SkeletonList rows={4} label="Loading changes" />;
-  if (changes.isError) return <Alert>{changes.error.message}</Alert>;
+  if (changes.isError) return <QueryError error={changes.error} retry={() => changes.refetch()} />;
   const { items, hasMore } = changes.data;
   const loadingMore = changes.isPlaceholderData;
 

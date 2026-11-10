@@ -2,12 +2,11 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router";
 import { isApiError } from "./api";
 import { DemoBanner } from "./demo";
-import { timeAgo } from "./format";
-import { BellIcon, BookIcon, CalendarIcon, FolderIcon, GearIcon, LogoMark, SunIcon, SyncIcon } from "./icons";
+import { syncOutcome, timeAgo, type SyncOutcome } from "./format";
+import { AlertIcon, BellIcon, BookIcon, CalendarIcon, CheckIcon, FolderIcon, GearIcon, LogoMark, SunIcon, SyncIcon } from "./icons";
 import { useConnection, useMe, useSync, useUnreadCount } from "./queries";
 import { TaskEditorProvider } from "./tasks";
 import { useToast } from "./toast";
-import type { SyncRun } from "./types";
 import { Alert, Spinner, useFocusHeading } from "./ui";
 
 /** Re-renders every `intervalMs` so relative times ("5 minutes ago") stay true. */
@@ -80,58 +79,87 @@ const NAV = [
 /** Phones get five tabs; Settings moves to the top bar. */
 const TABS = NAV.filter((item) => item.to !== "/settings");
 
-function syncMessage(run: SyncRun): { text: string; tone: "success" | "error" | "info" } {
-  const changes = run.changes_detected === 1 ? "1 change" : `${run.changes_detected} changes`;
-  if (run.status === "succeeded") return { text: `Sync finished: ${changes} found.`, tone: "success" };
-  if (run.status === "partial") return { text: `Sync finished with gaps: ${changes} found. ${run.error ?? ""}`, tone: "info" };
-  return { text: run.error ?? "The sync failed.", tone: "error" };
-}
+const TOAST_TONE = { success: "success", warning: "info", danger: "error" } as const;
+const DOT = { success: "ok", warning: "warn", danger: "bad" } as const;
+
+/** How long the Sync button shows the result of the sync it just ran. */
+const RESULT_MS = 4000;
 
 function SyncControl({ compact = false }: { compact?: boolean }) {
   const toast = useToast();
   const connection = useConnection();
   const now = useNow(30_000);
+  const [result, setResult] = useState<SyncOutcome | null>(null);
+  const report = (outcome: SyncOutcome) => {
+    setResult(outcome);
+    toast(`${outcome.label}: ${outcome.detail}`, TOAST_TONE[outcome.tone]);
+  };
   // Both copies (sidebar and phone top bar) are always mounted; only the sidebar one reports.
-  const sync = useSync(
-    compact
-      ? undefined
-      : (run) => {
-          const message = syncMessage(run);
-          toast(message.text, message.tone);
-        },
-  );
+  const sync = useSync(compact ? undefined : (run) => report(syncOutcome(run)));
+  useEffect(() => {
+    if (!result) return;
+    const timer = setTimeout(() => setResult(null), RESULT_MS);
+    return () => clearTimeout(timer);
+  }, [result]);
+
   const rejected = connection.data?.status === "token_rejected";
-  const lastSynced = connection.data?.last_synced_at ?? null;
-  const status = sync.running ? "Syncing with Canvas…" : rejected ? "Canvas needs reconnecting" : `Synced ${timeAgo(lastSynced, now)}`;
+  const run = sync.run;
+  // The latest finished sync, scheduled ones included, stays visible after its toast is gone.
+  const last = run && run.status !== "running" ? syncOutcome(run) : null;
+  const lastAt = run?.finished_at ?? run?.started_at ?? null;
+  let status: string;
+  let dot: "busy" | "ok" | "warn" | "bad";
+  if (sync.running) [status, dot] = ["Syncing with Canvas…", "busy"];
+  else if (rejected) [status, dot] = ["Canvas needs reconnecting", "bad"];
+  else if (last && last.tone !== "success") [status, dot] = [`${last.tone === "danger" ? "Last sync failed" : "Synced with gaps"} ${timeAgo(lastAt, now)}`, DOT[last.tone]];
+  else {
+    // The finished run arrives before the refreshed connection, so show whichever is later.
+    const times = [lastAt, connection.data?.last_synced_at ?? null].filter((time): time is string => time !== null);
+    [status, dot] = [`Synced ${timeAgo(times.sort().at(-1) ?? null, now)}`, "ok"];
+  }
+  const detail = !sync.running && !rejected && last ? last.detail : null;
 
   const start = () =>
     sync.start.mutate(undefined, {
-      onError: (error) => toast(error.message, "error"),
+      onError: (error) => report({ label: "Sync failed", detail: error.message, tone: "danger" }),
     });
 
   if (compact) {
     return (
       <button
         type="button"
-        className="icon-button"
+        className="icon-button sync-icon-button"
         onClick={start}
         disabled={sync.running || rejected}
-        aria-label={sync.running ? "Syncing with Canvas" : `Sync now. ${status}`}
-        title={status}
+        aria-label={sync.running ? "Syncing with Canvas" : `Sync now. ${status}${detail ? `: ${detail}` : ""}`}
+        title={detail ? `${status}: ${detail}` : status}
       >
         <SyncIcon className={sync.running ? "spin" : undefined} />
+        {dot === "warn" || dot === "bad" ? <span className={`status-dot ${dot}`} aria-hidden="true" /> : null}
       </button>
     );
   }
   return (
     <div className="sync-panel">
       <p className="sync-status">
-        <span className={`status-dot ${sync.running ? "busy" : rejected ? "bad" : "ok"}`} aria-hidden="true" />
+        <span className={`status-dot ${dot}`} aria-hidden="true" />
         {status}
       </p>
-      <button type="button" className="button secondary full" onClick={start} disabled={sync.running || rejected}>
-        <SyncIcon size={18} className={sync.running ? "spin" : undefined} />
-        {sync.running ? "Syncing…" : "Sync now"}
+      {detail ? <p className={`sync-detail sync-detail-${dot}`}>{detail}</p> : null}
+      <button
+        type="button"
+        className={`button secondary full${result && !sync.running ? ` sync-result-${result.tone}` : ""}`}
+        onClick={start}
+        disabled={sync.running || rejected}
+      >
+        {sync.running || !result ? (
+          <SyncIcon size={18} className={sync.running ? "spin" : undefined} />
+        ) : result.tone === "danger" ? (
+          <AlertIcon size={18} />
+        ) : (
+          <CheckIcon size={18} />
+        )}
+        {sync.running ? "Syncing…" : result ? (result.tone === "danger" ? "Sync failed" : "Synced") : "Sync now"}
       </button>
     </div>
   );

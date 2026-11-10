@@ -19,6 +19,7 @@ CanvasWatcher collects course materials, deadlines, tasks, and meaningful change
 | Courses, tasks, files, changes (read, mark read, archive) | Done (week 2) |
 | Today plan, Timeline, Calendar (.ics import, own events), study settings, task edits | Done (week 3), with tests |
 | Demo accounts, change-feed indexes, file paging | Done (week 4), with tests; before/after query measurements in [performance.md](docs/cs409/performance.md) |
+| Due next week on Today (start work before the plan reaches it), sync results on screen | Done (week 4, before round 1), with tests |
 | Heuristic evaluation | Round 1 kit ready in [heuristic-evaluation.md](docs/cs409/heuristic-evaluation.md); not run yet |
 | Frontend | Rewritten in `frontend/src/app` with React Router: sign-in, sign-up, onboarding, Today, Calendar (week and timeline views), Courses, Changes, Files, Settings. The previous interface was deleted in week 3 |
 
@@ -44,9 +45,9 @@ CanvasWatcher collects course materials, deadlines, tasks, and meaningful change
 | `GET /api/courses/{id}`, `PATCH /api/courses/{id}` | One course; archive or restore it | 200 |
 | `GET /api/tasks[?course_id=&status=all&due_after=&due_before=]` | Open tasks (or all) by due date, undated last | 200 |
 | `POST /api/tasks` | Add a personal task to one of your courses | 201 |
-| `GET /api/tasks/{id}`, `PATCH /api/tasks/{id}` | One task; set `done`, `ignored`, `progress`, `estimated_minutes`, `notes` (and `title`, `type`, `due_at` on personal tasks) | 200 |
+| `GET /api/tasks/{id}`, `PATCH /api/tasks/{id}` | One task; set `done`, `ignored`, `progress`, `estimated_minutes`, `notes`, `start_today` (and `title`, `type`, `due_at` on personal tasks) | 200 |
 | `DELETE /api/tasks/{id}` | Delete a personal task (Canvas tasks can only be ignored) | 204 |
-| `GET /api/today` | Today's plan: free time in the study window after busy events, planned tasks with reasons, today's events, what was done today | 200 |
+| `GET /api/today` | Today's plan: free time in the study window after busy events, planned tasks with reasons, open work due in the next 7 days, today's events, what was done today | 200 |
 | `GET /api/calendar/events?from=&to=` | Events overlapping a range (imported and your own) | 200 |
 | `POST /api/calendar/events`, `PATCH /api/calendar/events/{id}`, `DELETE /api/calendar/events/{id}` | Add, edit or delete your own events; busy events take time out of the plan | 201, 200, 204 |
 | `GET /api/calendar/sources`, `POST /api/calendar/sources`, `DELETE /api/calendar/sources/{id}` | Imported .ics calendars: list, import (up to 1.5 MB, 20 calendars), remove with their events | 200, 201, 204 |
@@ -96,6 +97,8 @@ npm run dev                      # API on http://localhost:8000, restarts on sav
 ```
 
 In another terminal, `cd frontend && npm install && npm run dev` serves the UI on `http://localhost:5173` and proxies `/api` to `localhost:8000` (override with `VITE_API_PROXY`).
+
+`server/.env.example` turns demo accounts off. Set `DEMO_ACCOUNTS=true` in `server/.env` to get **Try a demo** on the sign-in page while developing; the Docker stack turns them on by default.
 
 | Command (in `server/`) | Does |
 | --- | --- |

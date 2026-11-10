@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { DateTime } from "luxon";
 import { z } from "zod";
 import { currentAuth } from "../auth/middleware.js";
 import type { Db } from "../db.js";
@@ -7,6 +8,7 @@ import { FieldError, HttpError } from "../http/errors.js";
 import { idParam, parseQuery } from "../http/params.js";
 import { TASK_TYPES } from "../tasks/effort.js";
 import { openTaskWhere, presentTask, taskInclude } from "./present.js";
+import { getSettings } from "./settings.js";
 
 const instant = z.iso
   .datetime({ offset: true, error: "Use a date and time with a time zone, for example 2026-11-06T23:59:00-06:00." })
@@ -52,6 +54,8 @@ const changes = z
       .max(100, "Use 0 to 100."),
     estimated_minutes: estimate.nullable(),
     notes: notes.nullable(),
+    /** Put the task on today's plan now, ahead of the planner (false takes it back off). */
+    start_today: z.boolean({ error: "Send start_today as true or false." }),
     // Only for personal tasks; Canvas owns these fields of its assignments.
     title,
     type: taskType,
@@ -131,12 +135,18 @@ export function tasksRouter(db: Db): Router {
       throw new HttpError(409, "TASK_FROM_CANVAS", "This task comes from Canvas. Change its title and due date in Canvas.");
     }
     const now = new Date();
+    let startedOn: string | null | undefined;
+    if (body.start_today !== undefined) {
+      const { timeZone } = await getSettings(db, userId);
+      startedOn = body.start_today ? DateTime.fromJSDate(now, { zone: timeZone }).toISODate() : null;
+    }
     const data: Prisma.TaskUpdateInput = {
       ...(body.done !== undefined && { completedAt: body.done ? (task.completedAt ?? now) : null }),
       ...(body.ignored !== undefined && { ignoredAt: body.ignored ? (task.ignoredAt ?? now) : null }),
       ...(body.progress !== undefined && { progress: body.progress }),
       ...(body.estimated_minutes !== undefined && { estimatedMinutes: body.estimated_minutes }),
       ...(body.notes !== undefined && { notes: body.notes || null }),
+      ...(startedOn !== undefined && { startedOn }),
       ...(body.title !== undefined && { title: body.title }),
       ...(body.type !== undefined && { taskType: body.type }),
       ...(body.due_at !== undefined && { dueAt: body.due_at }),

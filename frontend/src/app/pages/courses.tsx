@@ -21,7 +21,7 @@ export function CoursesPage() {
     <div className="page">
       <PageHeader title="Courses" description="Courses you are enrolled in this term. Archive a course to hide it everywhere." />
       {active.isPending ? <SkeletonList rows={3} label="Loading courses" /> : null}
-      {active.isError ? <Alert>{active.error.message}</Alert> : null}
+      {active.isError ? <QueryError error={active.error} retry={() => active.refetch()} /> : null}
       {active.data?.length === 0 ? (
         <EmptyState icon={<BookIcon size={28} />} title="No active courses">
           Courses appear after a sync. If you archived them all, show the archived courses below.
@@ -45,7 +45,7 @@ export function CoursesPage() {
         {showArchived ? (
           <>
             {archived.isPending ? <SkeletonList rows={2} label="Loading archived courses" /> : null}
-            {archived.isError ? <Alert>{archived.error.message}</Alert> : null}
+            {archived.isError ? <QueryError error={archived.error} retry={() => archived.refetch()} /> : null}
             {archived.data?.length === 0 ? <p className="muted">You have not archived any courses.</p> : null}
             {archived.data && archived.data.length > 0 ? (
               <ul className="course-grid archived">
@@ -145,7 +145,7 @@ function CourseFiles({ courseId }: { courseId: number }) {
   const [pages, more] = usePages(String(courseId));
   const files = useFiles({ courseId, pages });
   if (files.isPending) return <SkeletonList rows={4} label="Loading files" />;
-  if (files.isError) return <Alert>{files.error.message}</Alert>;
+  if (files.isError) return <QueryError error={files.error} retry={() => files.refetch()} />;
   const { items, hasMore } = files.data;
   if (items.length === 0) {
     return (
@@ -187,7 +187,7 @@ export function CourseDetailPage() {
     );
   }
   if (course.isPending) return <SkeletonList rows={4} label="Loading course" />;
-  if (course.isError) return <Alert>{course.error.message}</Alert>;
+  if (course.isError) return <QueryError error={course.error} retry={() => course.refetch()} />;
   const data = course.data;
 
   const toggleArchive = () =>

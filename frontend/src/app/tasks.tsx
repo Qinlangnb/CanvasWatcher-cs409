@@ -295,14 +295,14 @@ function TaskDialog({ task, open, onClose }: { task: Task; open: boolean; onClos
           )}
           {submitted ? null : <ProgressField value={draft.progress} onChange={(value) => set("progress", value)} />}
           <Field
-            label="Time it takes, in minutes"
+            label="Total time it takes, in minutes"
             inputMode="numeric"
             value={draft.estimate}
             onChange={(event) => set("estimate", event.target.value)}
             placeholder={String(defaultMinutes(draft.type))}
-            hint={`Leave empty to use ${formatMinutes(defaultMinutes(draft.type))}, the usual time for ${(
-              TASK_TYPE_LABELS[draft.type] ?? "this type"
-            ).toLowerCase()}.`}
+            hint={`From start to finish, including what you've done; progress takes off the done part. Leave empty to use ${formatMinutes(
+              defaultMinutes(draft.type),
+            )}, the usual time for ${(TASK_TYPE_LABELS[draft.type] ?? "this type").toLowerCase()}.`}
             error={fields.estimated_minutes}
           />
           <p className="muted" aria-live="polite">
@@ -424,7 +424,7 @@ function NewTaskDialog({ open, courseId, onClose }: { open: boolean; courseId?: 
           <Field label="Due (optional)" type="datetime-local" value={due} onChange={(event) => setDue(event.target.value)} hint={zoneHint(zone)} error={fields.due_at} />
         </div>
         <Field
-          label="Time it takes, in minutes (optional)"
+          label="Total time it takes, in minutes (optional)"
           inputMode="numeric"
           value={estimate}
           onChange={(event) => setEstimate(event.target.value)}

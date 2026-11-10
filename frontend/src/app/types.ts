@@ -74,6 +74,8 @@ export interface Task {
   estimated_minutes: number | null;
   total_minutes: number;
   remaining_minutes: number;
+  /** Local date (YYYY-MM-DD) the student started it ahead of the plan; that day's plan includes it. */
+  started_on: string | null;
   notes: string | null;
 }
 
@@ -83,6 +85,8 @@ export interface TaskChanges {
   progress?: number;
   estimated_minutes?: number | null;
   notes?: string | null;
+  /** Put the task on today's plan now (false takes it back off). */
+  start_today?: boolean;
   title?: string;
   type?: TaskType;
   due_at?: string | null;
@@ -150,7 +154,7 @@ export interface PlanSettings {
   study_end_minute: number;
 }
 
-export type TodayReason = "overdue" | "due_today" | "low_slack" | "quick_finish" | "get_ahead";
+export type TodayReason = "overdue" | "due_today" | "low_slack" | "quick_finish" | "started" | "get_ahead";
 
 export interface TodayItem {
   task: Task;
@@ -162,6 +166,9 @@ export interface TodayItem {
   reasons: TodayReason[];
 }
 
+/** Work due soon; `planned_minutes` is 0 when today's plan doesn't (yet) give it time. */
+export type UpcomingItem = Pick<TodayItem, "task" | "remaining_minutes" | "planned_minutes" | "reasons">;
+
 export interface Today {
   date: string;
   time_zone: string;
@@ -172,6 +179,10 @@ export interface Today {
   planned_minutes: number;
   due_today_minutes: number;
   items: TodayItem[];
+  /** Open work due from now through `upcoming_through`, planned or not, soonest first. */
+  upcoming: UpcomingItem[];
+  /** The last instant of the 7th local day after today. */
+  upcoming_through: string;
   done_today: Task[];
   events: CalendarEvent[];
 }

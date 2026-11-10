@@ -19,6 +19,7 @@ CanvasWatcher 从 Canvas 和受支持的课程网站汇集资料、截止日期�
 | 课程、任务、文件、变动（只读、标记已读、归档） | 已完成（第 2 周） |
 | Today 计划、Timeline、日历（.ics 导入、自建事件）、学习设置、任务编辑 | 已完成（第 3 周），有测试 |
 | 演示账号、变动列表索引、文件分页 | 已完成（第 4 周），有测试；改动前后的查询实测见 [performance.md](docs/cs409/performance.md) |
+| Today 的 Due next week（在计划排到之前就开始做）、同步结果提示 | 已完成（第 4 周，第 1 轮评估前），有测试 |
 | 启发式评估 | 第 1 轮材料已备好，见 [heuristic-evaluation.md](docs/cs409/heuristic-evaluation.md)；尚未进行 |
 | 前端 | 在 `frontend/src/app` 用 React Router 重写：登录、注册、引导、Today、日历（周视图与 Timeline）、课程、变动、文件、设置；旧界面已在第 3 周删除 |
 
@@ -44,9 +45,9 @@ CanvasWatcher 从 Canvas 和受支持的课程网站汇集资料、截止日期�
 | `GET /api/courses/{id}`、`PATCH /api/courses/{id}` | 单门课程；归档或恢复 | 200 |
 | `GET /api/tasks[?course_id=&status=all&due_after=&due_before=]` | 未完成（或全部）任务，按截止时间排序，无截止的排最后 | 200 |
 | `POST /api/tasks` | 在自己的某门课下新建个人任务 | 201 |
-| `GET /api/tasks/{id}`、`PATCH /api/tasks/{id}` | 单个任务；设置 `done`、`ignored`、`progress`、`estimated_minutes`、`notes`（个人任务还可改 `title`、`type`、`due_at`） | 200 |
+| `GET /api/tasks/{id}`、`PATCH /api/tasks/{id}` | 单个任务；设置 `done`、`ignored`、`progress`、`estimated_minutes`、`notes`、`start_today`（个人任务还可改 `title`、`type`、`due_at`） | 200 |
 | `DELETE /api/tasks/{id}` | 删除个人任务（Canvas 任务只能忽略） | 204 |
-| `GET /api/today` | 今日计划：学习时段内扣除忙碌事件后的空闲时间、带理由的计划任务、今天的事件、今天已完成的任务 | 200 |
+| `GET /api/today` | 今日计划：学习时段内扣除忙碌事件后的空闲时间、带理由的计划任务、未来 7 天内到期的未完成任务、今天的事件、今天已完成的任务 | 200 |
 | `GET /api/calendar/events?from=&to=` | 与区间重叠的事件（导入的与自建的） | 200 |
 | `POST /api/calendar/events`、`PATCH /api/calendar/events/{id}`、`DELETE /api/calendar/events/{id}` | 新建、修改、删除自建事件；忙碌事件会从计划里扣除时间 | 201、200、204 |
 | `GET /api/calendar/sources`、`POST /api/calendar/sources`、`DELETE /api/calendar/sources/{id}` | 导入的 .ics 日历：列表、导入（最大 1.5 MB，最多 20 个）、连同事件一起删除 | 200、201、204 |
@@ -96,6 +97,8 @@ npm run dev                      # API 运行在 http://localhost:8000，保存�
 ```
 
 另开终端执行 `cd frontend && npm install && npm run dev`，界面位于 `http://localhost:5173`，`/api` 代理到 `localhost:8000`（可用 `VITE_API_PROXY` 覆盖）。
+
+`server/.env.example` 默认关闭演示账号。开发时若要在登录页显示 **Try a demo**，在 `server/.env` 中设置 `DEMO_ACCOUNTS=true`；Docker 整套部署默认开启。
 
 | `server/` 下的命令 | 作用 |
 | --- | --- |

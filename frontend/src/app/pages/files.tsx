@@ -3,7 +3,7 @@ import { plural } from "../format";
 import { FolderIcon, SearchIcon } from "../icons";
 import { FileTable } from "../lists";
 import { useCourses, useFiles } from "../queries";
-import { Alert, EmptyState, LoadMoreButton, PageHeader, SkeletonList, usePages } from "../ui";
+import { EmptyState, LoadMoreButton, PageHeader, QueryError, SkeletonList, usePages } from "../ui";
 
 function useDebounced<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -51,7 +51,7 @@ export function FilesPage() {
 
       <section className="card" aria-label="Files">
         {files.isPending ? <SkeletonList rows={5} label="Loading files" /> : null}
-        {files.isError ? <Alert>{files.error.message}</Alert> : null}
+        {files.isError ? <QueryError error={files.error} retry={() => files.refetch()} /> : null}
         {count ? (
           <p className="result-count" role="status">
             {count}

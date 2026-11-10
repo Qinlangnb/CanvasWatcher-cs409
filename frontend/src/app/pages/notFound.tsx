@@ -6,7 +6,7 @@ export function NotFoundPage() {
   return (
     <div className="page">
       <PageHeader title="Page not found" />
-      <EmptyState icon={<AlertIcon size={28} />} title="There is nothing at this address" action={<Link to="/">Go to Home</Link>}>
+      <EmptyState icon={<AlertIcon size={28} />} title="There is nothing at this address" action={<Link to="/">Go to Today</Link>}>
         The link may be out of date, or the page may have moved.
       </EmptyState>
     </div>
@@ -37,7 +37,7 @@ export function RouteErrorPage() {
             Reload page
           </button>
           <Link className="button ghost" to="/" reloadDocument>
-            Go to Home
+            Go to Today
           </Link>
         </div>
       </main>

@@ -231,7 +231,7 @@ test("planning labels: minutes, clock times, reasons and zoned days", () => {
   assert.equal(format.formatMinuteOfDay(750), "12:30 PM");
   assert.equal(format.formatMinuteOfDay(1410), "11:30 PM");
   assert.equal(format.formatMinuteOfDay(1440), "Midnight");
-  assert.deepEqual(Object.keys(format.REASON_LABELS).sort(), ["due_today", "get_ahead", "low_slack", "overdue", "quick_finish"]);
+  assert.deepEqual(Object.keys(format.REASON_LABELS).sort(), ["due_today", "get_ahead", "low_slack", "overdue", "quick_finish", "started"]);
   assert.equal(format.TASK_TYPE_LABELS.other, "Other");
 
   const instant = new Date("2026-11-07T04:30:00Z");
@@ -243,4 +243,33 @@ test("planning labels: minutes, clock times, reasons and zoned days", () => {
   assert.match(format.formatDue(instant.toISOString(), now, CHICAGO), /^Today, 10:30\sPM$/);
   assert.match(format.formatDue(instant.toISOString(), now, SHANGHAI), /^Today, 12:30\sPM$/);
   assert.equal(format.formatLongDate(instant, CHICAGO), "Friday, November 6");
+});
+
+test("due next week labels each day relative to today in the planning zone", () => {
+  const now = new Date("2026-11-06T18:00:00Z"); // Friday noon in Chicago
+  assert.equal(format.dueDayLabel("2026-11-07T05:59:00Z", now, CHICAGO), "Today");
+  assert.equal(format.dueDayLabel("2026-11-07T06:00:00Z", now, CHICAGO), "Tomorrow");
+  assert.equal(format.dueDayLabel("2026-11-11T05:59:00Z", now, CHICAGO), "Tue, Nov 10");
+  // 9 AM Saturday in Chicago is still Saturday, today, in Shanghai.
+  assert.equal(format.dueDayLabel("2026-11-07T15:00:00Z", now, CHICAGO), "Tomorrow");
+  assert.equal(format.dueDayLabel("2026-11-07T15:00:00Z", now, SHANGHAI), "Today");
+  assert.deepEqual(format.REASON_LABELS.started, { label: "Started early", tone: "accent" });
+});
+
+test("a finished sync reads as success, gaps or failure", () => {
+  const run = (fields) => ({ status: "succeeded", changes_detected: 0, error: null, ...fields });
+  assert.deepEqual(format.syncOutcome(run()), { label: "Sync finished", detail: "Nothing new", tone: "success" });
+  assert.deepEqual(format.syncOutcome(run({ changes_detected: 3 })), { label: "Sync finished", detail: "3 changes found", tone: "success" });
+  assert.deepEqual(format.syncOutcome(run({ status: "partial", changes_detected: 1 })), {
+    label: "Sync finished with gaps",
+    detail: "1 change found",
+    tone: "warning",
+  });
+  assert.equal(format.syncOutcome(run({ status: "partial", error: "CS 409 files could not be read." })).detail, "CS 409 files could not be read.");
+  assert.deepEqual(format.syncOutcome(run({ status: "failed", error: "Canvas rejected the token." })), {
+    label: "Sync failed",
+    detail: "Canvas rejected the token.",
+    tone: "danger",
+  });
+  assert.match(format.syncOutcome(run({ status: "failed" })).detail, /could not be reached/);
 });

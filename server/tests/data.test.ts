@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { CANVAS_ORIGIN, fakeCanvas, seedCourse } from "./fakeCanvas.js";
+import { CANVAS_ORIGIN, daysFromNow, fakeCanvas, seedCourse } from "./fakeCanvas.js";
 import { Browser, connectCanvas, db, resetDatabase, signUp, syncNow } from "./helpers.js";
 
 beforeEach(async () => {
@@ -14,7 +14,7 @@ async function adaWithChanges(): Promise<Browser> {
   const ada = await signUp();
   await connectCanvas(ada);
   fakeCanvas.assignments.get("101")?.push(
-    { id: 1012, name: "HW 2", due_at: "2026-11-20T05:59:00Z", points_possible: 10 },
+    { id: 1012, name: "HW 2", due_at: daysFromNow(25), points_possible: 10 },
     { id: 1013, name: "Reading 1", due_at: null },
     {
       id: 1014,

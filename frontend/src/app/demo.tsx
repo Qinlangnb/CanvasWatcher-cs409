@@ -121,7 +121,10 @@ export function DemoBanner() {
           </div>
         }
       >
-        <span title={formatDateTime(expires)}>Sample data only. Deleted on {formatShortDate(expires)} or when you end the demo.</span>
+        <span title={formatDateTime(expires)}>
+          Sample data only. Deleted on {formatShortDate(expires)}
+          <span className="demo-banner-extra"> or when you end the demo</span>.
+        </span>
       </Alert>
       <ResetDemoDialog open={dialog === "reset"} onClose={() => setDialog(null)} />
       <EndDemoDialog open={dialog === "end"} onClose={() => setDialog(null)} />

@@ -144,4 +144,20 @@ describe("today's plan", () => {
       [next.id, 30],
     ]);
   });
+
+  it("plans work the student started today ahead of tasks it would only get ahead on", () => {
+    const ahead = task({ dueAt: inHours(24 * 5), estimatedMinutes: 150, pointsPossible: 100 });
+    const started = task({ dueAt: inHours(24 * 6), estimatedMinutes: 90, pointsPossible: 10, startedOn: "2026-11-06" });
+    const yesterday = task({ dueAt: inHours(24 * 6), startedOn: "2026-11-05" });
+    const result = plan([ahead, started, yesterday]);
+    // Starting it yesterday doesn't count today: it waits like any other get-ahead task, and the time ran out.
+    expect(result.items.map((item) => [item.taskId, item.plannedMinutes, item.reasons])).toEqual([
+      [started.id, 90, ["started"]],
+      [ahead.id, 90, ["get_ahead"]],
+    ]);
+    expect(result.items.some((item) => item.taskId === yesterday.id)).toBe(false);
+    // Starting urgent work early keeps its own reasons first.
+    const due = task({ dueAt: inHours(3), startedOn: "2026-11-06" });
+    expect(plan([due]).items[0]?.reasons).toEqual(["due_today", "started"]);
+  });
 });

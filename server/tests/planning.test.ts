@@ -313,6 +313,37 @@ describe("today", () => {
     expect(after.events.map((event: { title: string }) => event.title)).toContain("Lecture");
   });
 
+  it("lists work due in the next 7 days and lets the student start it before the plan does", async () => {
+    const { ada, courseId } = await adaWithCourse();
+    await ada.send("patch", "/api/settings", { body: { time_zone: "UTC", study_start_minute: 0, study_end_minute: 1440 } });
+    const add = async (title: string, dueMs: number, minutes = 60) =>
+      (await ada.send("post", "/api/tasks", { body: { course_id: courseId, title, due_at: fromNow(dueMs), estimated_minutes: minutes } }))
+        .body as { id: number };
+    // A full day of urgent work leaves nothing for getting ahead.
+    await add("Due soon", 2 * HOUR, 180);
+    const later = await add("Later this week", 4 * DAY);
+    await add("Overdue", -HOUR);
+    await add("Too far", 10 * DAY);
+
+    const before = (await ada.send("get", "/api/today")).body;
+    expect(before.upcoming.map((item: { task: { title: string } }) => item.task.title)).toEqual(["Due soon", "Later this week"]);
+    expect(before.upcoming[0]).toMatchObject({ planned_minutes: expect.any(Number), reasons: expect.arrayContaining(["due_today"]) });
+    expect(before.upcoming[1]).toMatchObject({ planned_minutes: 0, reasons: [], remaining_minutes: 60, task: { started_on: null } });
+    expect(new Date(before.upcoming_through).getTime()).toBeGreaterThan(Date.now() + 7 * DAY);
+
+    const started = await ada.send("patch", `/api/tasks/${later.id}`, { body: { start_today: true } });
+    expect(started.body.started_on).toBe(new Date().toISOString().slice(0, 10));
+    const after = (await ada.send("get", "/api/today")).body;
+    const item = after.items.find((entry: { task: { id: number } }) => entry.task.id === later.id);
+    expect(item.reasons).toEqual(["started"]);
+    expect(after.upcoming[1].reasons).toEqual(["started"]);
+
+    await ada.send("patch", `/api/tasks/${later.id}`, { body: { start_today: false } });
+    const undone = (await ada.send("get", "/api/today")).body;
+    expect(undone.items.map((entry: { task: { id: number } }) => entry.task.id)).not.toContain(later.id);
+    expect((await ada.send("patch", `/api/tasks/${later.id}`, { body: { start_today: "yes" } })).status).toBe(422);
+  });
+
   it("only plans the signed-in user's tasks", async () => {
     const { ada, courseId } = await adaWithCourse();
     await ada.send("post", "/api/tasks", { body: { course_id: courseId, title: "Ada's", due_at: fromNow(HOUR) } });

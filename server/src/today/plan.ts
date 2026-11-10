@@ -6,9 +6,9 @@
 //   importance        points possible / 100, 0.4 when Canvas gives none
 //   schedule pressure how little free study time is left before the due date, after the work left
 //   quick finish      30 minutes or less left on something due within a week
-// A task makes the plan when it is overdue (by up to a week), due today, short on slack, or a quick
-// finish. Today's study capacity is then handed out in score order; capacity left over goes to
-// the next tasks due within two weeks ("get ahead").
+// A task makes the plan when it is overdue (by up to a week), due today, short on slack, a quick
+// finish, or the student started it today ahead of the plan. Today's study capacity is then handed
+// out in score order; capacity left over goes to the next tasks due within two weeks ("get ahead").
 import { DateTime } from "luxon";
 import type { PlanSettings } from "../routes/settings.js";
 import { remainingMinutes } from "../tasks/effort.js";
@@ -19,7 +19,7 @@ export const OVERDUE_LOOKBACK_DAYS = 7;
 const MINUTE = 60_000;
 const DAY_MINUTES = 1440;
 
-export type Reason = "overdue" | "due_today" | "low_slack" | "quick_finish" | "get_ahead";
+export type Reason = "overdue" | "due_today" | "low_slack" | "quick_finish" | "started" | "get_ahead";
 
 export interface PlanTask {
   id: number;
@@ -28,6 +28,8 @@ export interface PlanTask {
   pointsPossible: number | null;
   progress: number;
   estimatedMinutes: number | null;
+  /** Local date the student started the task ahead of the plan, if any. */
+  startedOn?: string | null;
 }
 
 export interface Interval {
@@ -120,6 +122,7 @@ function minutesBefore(spans: Span[], limit: number): number {
 export function buildPlan({ now, settings, tasks, busy }: PlanInput): Plan {
   const nowMs = now.getTime();
   const today = DateTime.fromJSDate(now, { zone: settings.timeZone }).startOf("day");
+  const todayDate = today.toISODate() as string;
   const dayEnd = today.plus({ days: 1 }).startOf("day");
   const daily = settings.dailyStudyMinutes;
   const busySpans = merge(busy);
@@ -175,6 +178,7 @@ export function buildPlan({ now, settings, tasks, busy }: PlanInput): Plan {
     else if (dueToday) reasons.push("due_today");
     else if (slack !== null && slack <= daily) reasons.push("low_slack");
     if (quickFinish) reasons.push("quick_finish");
+    if (task.startedOn === todayDate) reasons.push("started");
     return [{ task, due, remaining, slack, score, reasons }];
   });
 
@@ -208,7 +212,7 @@ export function buildPlan({ now, settings, tasks, busy }: PlanInput): Plan {
     .reduce((sum, item) => sum + item.remainingMinutes, 0);
 
   return {
-    date: today.toISODate() as string,
+    date: todayDate,
     dayStart: today.toJSDate(),
     dayEnd: dayEnd.toJSDate(),
     studyWindow: {

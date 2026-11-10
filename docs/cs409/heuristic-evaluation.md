@@ -27,11 +27,17 @@ saw.
 
 ## Setup
 
-1. Open the course deployment, or run it locally and open `http://localhost:8080`:
+1. Open the course deployment, or run it locally and open `http://localhost:8080`. Locally, create `.env` first
+   and give `SESSION_SECRET` and `CREDENTIALS_KEY` their own random values; the stack does not start without
+   them:
 
    ```bash
+   cp .env.example .env
+   node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"   # once for each key
    docker compose up -d --build
    ```
+
+   Demo accounts are on by default here (`DEMO_ACCOUNTS=true` in `docker-compose.yml`).
 
 2. On the sign-in page, choose **Try a demo**. You do not need a Canvas account, a token or a password.
 3. Each click creates a separate demo account. Evaluators never share one, and nobody sees anyone else's
@@ -97,7 +103,7 @@ Do these in order on a fresh demo. Write down problems as you go, including ones
 a task that is blocked; record why.
 
 1. **What's due.** From the first screen, find what is due today and what is overdue. Which course has the
-   overdue item?
+   overdue item? Then pick something due later this week that is not on today's plan, and start it today.
 2. **What changed.** Find the change to Quiz 10. What was the old time, and what is the new one? Then find out
    which file was added most recently.
 3. **Catch up.** Mark every change in MATH 241 as read. Then mark one change as unread again.
@@ -110,7 +116,7 @@ a task that is blocked; record why.
    - Find the Engineering career fair.
    - Use the timeline to find the busiest day of the next two weeks.
 7. **Find a file.** Find the PHYS 212 lab handout and try to download it.
-8. **Change the plan.** Set the daily study goal to 3 hours and the study window to 9 am–9 pm. Check how Today
+8. **Change the plan.** Set the daily study goal to 4 hours and the study window to 10 am–8 pm. Check how Today
    changes.
 9. **Tidy up.** Archive RHET 105, check where its tasks went, then bring the course back.
 10. **Sync.** Sync with Canvas and find out what the sync did.

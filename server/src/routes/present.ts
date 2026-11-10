@@ -111,6 +111,8 @@ export function presentTask(task: TaskWithCourse, now = new Date()) {
     estimated_minutes: task.estimatedMinutes,
     total_minutes: totalMinutes(task),
     remaining_minutes: state === "done" ? 0 : remainingMinutes(task),
+    /** Local date the student started it ahead of the plan; that day's plan includes it. */
+    started_on: task.startedOn,
     notes: task.notes,
   };
 }

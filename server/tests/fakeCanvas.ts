@@ -84,6 +84,9 @@ export class FakeCanvas {
 
 export const fakeCanvas = new FakeCanvas();
 
+/** A Canvas-style timestamp `days` from now. Fixed dates drift into the tests' planning windows. */
+export const daysFromNow = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+
 /** One course with an assignment, a file and an announcement. */
 export function seedCourse(canvas: FakeCanvas, id = 101, code = "CS 409"): void {
   const key = String(id);
@@ -99,7 +102,8 @@ export function seedCourse(canvas: FakeCanvas, id = 101, code = "CS 409"): void 
       id: id * 10 + 1,
       name: "MP 1: Layout",
       description: "<p>Build a <b>responsive</b> page.</p>",
-      due_at: "2026-11-10T05:59:00Z",
+      // Past Today's two-week horizon, so it never enters the plan tests.
+      due_at: daysFromNow(20),
       points_possible: 100,
       html_url: `${CANVAS_ORIGIN}/courses/${id}/assignments/${id * 10 + 1}`,
       submission: { workflow_state: "unsubmitted", submitted_at: null },

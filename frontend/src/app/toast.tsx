@@ -61,7 +61,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number)
       onFocus={() => setPaused(true)}
       onBlur={() => setPaused(false)}
     >
-      {toast.tone === "error" ? <AlertIcon size={18} /> : <CheckIcon size={18} />}
+      {toast.tone === "success" ? <CheckIcon size={18} /> : <AlertIcon size={18} />}
       <p>{toast.text}</p>
       {toast.action ? (
         <button

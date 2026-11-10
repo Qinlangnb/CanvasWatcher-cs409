@@ -1264,6 +1264,7 @@ body:has(.tabbar) .toast-region {
 }
 
 .status-dot {
+  flex: none;
   width: 8px;
   height: 8px;
   border-radius: 50%;
@@ -1275,8 +1276,69 @@ body:has(.tabbar) .toast-region {
   animation: pulse 1.2s ease-in-out infinite;
 }
 
+.status-dot.warn {
+  background: var(--warning);
+}
+
 .status-dot.bad {
   background: var(--danger);
+}
+
+/* What the latest sync found, or why it failed, under the status line. */
+.sync-detail {
+  margin-top: -4px;
+  padding-left: 16px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.sync-detail-bad {
+  color: var(--danger);
+}
+
+.sync-detail-warn {
+  color: var(--warning);
+}
+
+/* The Sync button shows how the sync it just ran ended, for a few seconds, even under the pointer. */
+.button.sync-result-success,
+.button.sync-result-success:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+  color: var(--success);
+}
+
+.button.sync-result-warning,
+.button.sync-result-warning:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--warning) 45%, transparent);
+  color: var(--warning);
+}
+
+.button.sync-result-danger,
+.button.sync-result-danger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--danger);
+}
+
+/* Phones: a dot on the sync icon when the latest sync failed or had gaps. */
+.sync-icon-button {
+  position: relative;
+}
+
+.sync-icon-button .status-dot {
+  position: absolute;
+  top: 9px;
+  right: 9px;
+  width: 9px;
+  height: 9px;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+.last-run {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: center;
 }
 
 @keyframes pulse {
@@ -2199,6 +2261,30 @@ body:has(.tabbar) .toast-region {
   margin-left: 30px;
 }
 
+/* Phones: title and sentence share a line, so the banner doesn't push Today down. */
+@media (max-width: 639px) {
+  .banner.demo-banner {
+    padding: 12px 12px 0;
+  }
+
+  .demo-banner .alert {
+    gap: 6px 10px;
+    padding: 8px 12px;
+  }
+
+  .demo-banner .alert-body {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 6px;
+    align-items: baseline;
+    font-size: 0.85rem;
+  }
+
+  .demo-banner-extra {
+    display: none;
+  }
+}
+
 @media (min-width: 900px) {
   .auth-layout {
     grid-template-columns: minmax(360px, 5fr) 6fr;
@@ -2782,6 +2868,168 @@ body:has(.tabbar) .toast-region {
 
 .source-text .muted {
   font-size: 0.85rem;
+}
+
+/* --- Due next week --- */
+
+.due-soon-range {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.due-soon-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0;
+  list-style: none;
+}
+
+.due-soon-item {
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.due-soon-item:last-child {
+  border-bottom: 0;
+}
+
+/* One line per task; the whole line is the button. */
+.due-soon-row {
+  display: grid;
+  grid-template-areas: "day main meta chevron";
+  grid-template-columns: 6.5rem minmax(0, 1fr) auto 20px;
+  gap: 2px 12px;
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.due-soon-row:hover,
+.due-soon-item.expanded > .due-soon-row {
+  background: var(--surface-2);
+}
+
+.due-soon-day {
+  grid-area: day;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.due-soon-day.soon {
+  color: var(--warning);
+}
+
+.due-soon-main {
+  display: flex;
+  grid-area: main;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.due-soon-main .course-chip {
+  flex: none;
+}
+
+.due-soon-title {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.due-soon-meta {
+  display: flex;
+  grid-area: meta;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.due-soon-chevron {
+  display: grid;
+  grid-area: chevron;
+  place-items: center;
+  color: var(--text-muted);
+}
+
+.due-soon-chevron svg {
+  transition: transform 0.15s ease-out;
+}
+
+.due-soon-item.expanded .due-soon-chevron svg {
+  transform: rotate(90deg);
+}
+
+.due-soon-chevron.up svg {
+  transform: rotate(-90deg);
+}
+
+/* The expanded task is the same row Today's plan uses, indented under its line. */
+.due-soon-panel {
+  padding: 0 6px 4px 12px;
+}
+
+.start-early {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+  margin-top: 6px;
+  font-size: 0.875rem;
+}
+
+.plan-undo {
+  padding: 0;
+  font-size: 0.85rem;
+}
+
+.task-row.flash {
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Phones: day, time and state on the first line, the task on the second. */
+@media (max-width: 639px) {
+  .due-soon-row {
+    grid-template-areas:
+      "day meta chevron"
+      "main main chevron";
+    grid-template-columns: max-content minmax(0, 1fr) 20px;
+    gap: 2px 8px;
+  }
+
+  .due-soon-meta {
+    justify-content: flex-start;
+  }
+
+  .due-soon-title {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .due-soon-panel {
+    padding-left: 0;
+  }
 }
 
 /* --- Motion --- */
