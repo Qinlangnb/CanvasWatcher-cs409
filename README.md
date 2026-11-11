@@ -83,6 +83,8 @@ docker compose up -d --build
 
 Open `http://localhost:8080`. nginx serves the frontend and forwards `/api` to the API container; the API port is not published. PostgreSQL listens on `127.0.0.1:5432` only. If that port is taken or reserved (Windows can reserve port ranges), set `POSTGRES_PORT` in `.env` and use the same port in `server/.env`.
 
+To serve the app under a path such as `https://example.com/cs409/` behind another reverse proxy, set `PUBLIC_BASE_PATH=/cs409` in `.env` and rebuild, and have that proxy forward the path unchanged (nginx removes it before the API). The frontend is built for that path, and the sign-in cookies are scoped to it, so another app on the same site cannot overwrite them. That proxy is one more hop: if it sets `X-Forwarded-For`, set `TRUST_PROXY: "2"` for `backend` in a Compose override file.
+
 ## Develop
 
 Requires Node.js 22.12 or newer.

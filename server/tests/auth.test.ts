@@ -1,15 +1,19 @@
 import { createHash } from "node:crypto";
 import request from "supertest";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { createApp } from "../src/app.js";
 import {
   Browser,
   NEW_PASSWORD,
   ORIGIN,
   PASSWORD,
   app,
+  config,
   cookieLine,
   db,
+  logger,
   resetDatabase,
+  services,
   setCookieLines,
   signUp,
 } from "./helpers.js";
@@ -51,6 +55,7 @@ describe("POST /api/users (sign up)", () => {
     });
     expect(cookieLine(res, "aw_session")).toMatch(/HttpOnly/i);
     expect(cookieLine(res, "aw_session")).toMatch(/SameSite=Lax/i);
+    expect(cookieLine(res, "aw_session")).toMatch(/; Path=\/(;|$)/);
     // The frontend reads this one to fill in the CSRF header.
     expect(cookieLine(res, "aw_csrf")).not.toMatch(/HttpOnly/i);
 
@@ -184,6 +189,24 @@ describe("DELETE /api/sessions/current (sign out)", () => {
   it("requires a signed-in browser", async () => {
     const res = await new Browser().send("delete", "/api/sessions/current");
     expect(res.status).toBe(401);
+  });
+});
+
+describe("an app served under a path (PUBLIC_BASE_PATH)", () => {
+  it("scopes the sign-in cookies to that path when it sets and clears them", async () => {
+    const mounted = createApp({ config: { ...config, cookiePath: "/cs409" }, db, logger, services });
+    const browser = new Browser(mounted);
+    const res = await browser.send("post", "/api/users", {
+      body: { username: "ada", email: "ada@example.com", password: PASSWORD },
+    });
+    expect(res.status).toBe(201);
+    for (const name of ["aw_session", "aw_csrf"]) expect(cookieLine(res, name)).toMatch(/; Path=\/cs409(;|$)/);
+
+    const out = await browser.send("delete", "/api/sessions/current");
+    expect(out.status).toBe(204);
+    // A clearing cookie on any other path would leave the browser's copy in place.
+    for (const name of ["aw_session", "aw_csrf"]) expect(cookieLine(out, name)).toMatch(/; Path=\/cs409(;|$)/);
+    expect(browser.cookies.size).toBe(0);
   });
 });
 

@@ -31,6 +31,8 @@ services:
       CREDENTIALS_KEY: ${CREDENTIALS_KEY:?Set CREDENTIALS_KEY in .env}
       CANVAS_ALLOWED_HOSTS: ${CANVAS_ALLOWED_HOSTS:-canvas.illinois.edu,*.instructure.com}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080}
+      # Scopes the sign-in cookies to the path the frontend is built for (see .env.example).
+      PUBLIC_BASE_PATH: ${PUBLIC_BASE_PATH:-/}
       # Only nginx (the frontend service) can reach the API, so trust exactly one proxy hop.
       TRUST_PROXY: "1"
       # The course deployment offers "Try a demo" on the sign-in page, so evaluators need no Canvas
@@ -49,7 +51,11 @@ services:
     restart: unless-stopped
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        # Page and asset URLs under the same path as the API's cookies.
+        VITE_PUBLIC_BASE: ${PUBLIC_BASE_PATH:-/}
     ports:
       - "127.0.0.1:8080:80"
     depends_on:

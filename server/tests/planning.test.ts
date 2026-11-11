@@ -182,10 +182,12 @@ describe("calendar", () => {
     expect(created.status).toBe(201);
     expect(created.body).toMatchObject({ title: "Shift at the library", all_day: false, start, end, busy: true, editable: true, source: null });
 
+    // Far enough ahead to stay outside the one-day listing below whenever the test runs.
+    const [fairStart, fairEnd] = [10, 11].map((days) => fromNow(days * DAY).slice(0, 10));
     const allDay = await ada.send("post", "/api/calendar/events", {
-      body: { title: "Career fair", all_day: true, start: "2026-11-12", end: "2026-11-13" },
+      body: { title: "Career fair", all_day: true, start: fairStart, end: fairEnd },
     });
-    expect(allDay.body).toMatchObject({ start: "2026-11-12", end: "2026-11-13", busy: false });
+    expect(allDay.body).toMatchObject({ start: fairStart, end: fairEnd, busy: false });
 
     const range = `from=${encodeURIComponent(fromNow(-DAY))}&to=${encodeURIComponent(fromNow(DAY))}`;
     const listed = await ada.send("get", `/api/calendar/events?${range}`);

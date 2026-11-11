@@ -1,5 +1,17 @@
 import { z } from "zod";
 
+/**
+ * "/cs409/" becomes "/cs409" and the site root becomes "". Null unless the value is an absolute path of
+ * plain segments (the same rule as the frontend's VITE_PUBLIC_BASE, plus no characters a cookie path rejects).
+ */
+export function normalizeBasePath(value: string): string | null {
+  const path = value.trim().replace(/\/+$/, "");
+  if (!path) return "";
+  if (!path.startsWith("/") || /[?#;,\s]/.test(path)) return null;
+  const segments = path.slice(1).split("/");
+  return segments.every((segment) => segment && segment !== "." && segment !== "..") ? path : null;
+}
+
 const environment = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().min(1).max(65535).default(8000),
@@ -17,6 +29,14 @@ const environment = z.object({
   SYNC_INTERVAL_MINUTES: z.coerce.number().int().min(0).default(30),
   /** Overrides the default, which is Secure cookies whenever every allowed origin is HTTPS. */
   COOKIE_SECURE: z.enum(["true", "false"]).optional(),
+  /**
+   * The path the app is served under, such as /cs409 (matching the frontend's VITE_PUBLIC_BASE). The
+   * sign-in cookies are scoped to it, so another app on the same site cannot overwrite them.
+   */
+  PUBLIC_BASE_PATH: z
+    .string()
+    .default("/")
+    .refine((value) => normalizeBasePath(value) !== null, "PUBLIC_BASE_PATH must be an absolute path such as /cs409"),
   /** Number of reverse proxies in front of the API, used to find the client address. */
   TRUST_PROXY: z.coerce.number().int().min(0).default(0),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
@@ -34,6 +54,8 @@ export interface Config {
   canvasAllowedHosts: string[];
   syncIntervalMinutes: number;
   secureCookies: boolean;
+  /** Path attribute of the session and CSRF cookies: PUBLIC_BASE_PATH, or "/" at the site root. */
+  cookiePath: string;
   trustProxy: number;
   logLevel: string;
   demoAccounts: boolean;
@@ -66,6 +88,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     secureCookies: values.COOKIE_SECURE
       ? values.COOKIE_SECURE === "true"
       : allowedOrigins.every((origin) => origin.startsWith("https://")),
+    cookiePath: normalizeBasePath(values.PUBLIC_BASE_PATH) || "/",
     trustProxy: values.TRUST_PROXY,
     logLevel: values.LOG_LEVEL,
     demoAccounts: values.DEMO_ACCOUNTS === "true",

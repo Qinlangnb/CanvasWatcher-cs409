@@ -83,6 +83,8 @@ docker compose up -d --build
 
 打开 `http://localhost:8080`。nginx 提供前端并把 `/api` 转发到 API 容器，API 端口不对外发布；PostgreSQL 只监听 `127.0.0.1:5432`；该端口被占用或被 Windows 保留时，在 `.env` 设置 `POSTGRES_PORT`，并在 `server/.env` 使用同一端口。Windows PowerShell 可用 `Copy-Item` 替代 `cp`。
 
+若要在另一个反向代理后以子路径提供服务（如 `https://example.com/cs409/`），在 `.env` 设置 `PUBLIC_BASE_PATH=/cs409` 并重新构建，代理原样转发该路径（nginx 会在转给 API 前去掉它）。前端按该路径构建，登录 cookie 也限定在该路径下，同站点的其他应用无法覆盖。该代理多了一跳：若它设置 `X-Forwarded-For`，在 Compose override 文件中为 `backend` 设置 `TRUST_PROXY: "2"`。
+
 ## 开发
 
 需要 Node.js 22.12 或更新版本。

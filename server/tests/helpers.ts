@@ -1,3 +1,4 @@
+import type { Express } from "express";
 import { pino } from "pino";
 import request, { type Response } from "supertest";
 import { expect } from "vitest";
@@ -26,7 +27,7 @@ export const config = loadConfig({
   DEMO_ACCOUNTS: "true",
 });
 export const db = createDb(config.databaseUrl);
-const logger = pino({ level: "silent" });
+export const logger = pino({ level: "silent" });
 export const services = createServices({ config, db, logger, canvas: fakeCanvas.factory });
 export const app = createApp({ config, db, logger, services });
 
@@ -61,8 +62,11 @@ interface SendOptions {
 export class Browser {
   readonly cookies = new Map<string, string>();
 
+  /** `target` is the app under test; tests of other settings pass their own. */
+  constructor(private readonly target: Express = app) {}
+
   async send(method: Method, path: string, options: SendOptions = {}): Promise<Response> {
-    const req = request(app)[method](path);
+    const req = request(this.target)[method](path);
     const origin = options.origin === undefined ? ORIGIN : options.origin;
     if (origin) req.set("Origin", origin);
     if (this.cookies.size > 0) {

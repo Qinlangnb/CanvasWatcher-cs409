@@ -56,13 +56,14 @@ export async function revokeSession(db: Db, sessionId: string): Promise<void> {
 }
 
 export function setSessionCookies(res: Response, config: Config, session: IssuedSession): void {
-  const common = { path: "/", sameSite: "lax", secure: config.secureCookies, expires: session.expiresAt } as const;
+  const common = { path: config.cookiePath, sameSite: "lax", secure: config.secureCookies, expires: session.expiresAt } as const;
   res.cookie(SESSION_COOKIE, session.token, { ...common, httpOnly: true });
   res.cookie(CSRF_COOKIE, csrfToken(config.sessionSecret, session.token), { ...common, httpOnly: false });
 }
 
 export function clearSessionCookies(res: Response, config: Config): void {
-  const common = { path: "/", sameSite: "lax", secure: config.secureCookies } as const;
+  // Cleared on the path they were set on, or the browser keeps them.
+  const common = { path: config.cookiePath, sameSite: "lax", secure: config.secureCookies } as const;
   res.clearCookie(SESSION_COOKIE, { ...common, httpOnly: true });
   res.clearCookie(CSRF_COOKIE, { ...common, httpOnly: false });
 }

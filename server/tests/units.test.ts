@@ -2,9 +2,38 @@ import { describe, expect, it } from "vitest";
 import { CanvasClient, CanvasError } from "../src/canvas/client.js";
 import { CanvasAddressError, canvasOrigin } from "../src/canvas/hosts.js";
 import { changeSummary, changedFields, htmlToText, taskType } from "../src/canvas/normalize.js";
+import { loadConfig } from "../src/config.js";
 import { SecretBox } from "../src/security/secretBox.js";
 
 const ALLOWED = ["canvas.illinois.edu", "*.instructure.com"];
+
+describe("PUBLIC_BASE_PATH", () => {
+  const cookiePath = (value?: string) =>
+    loadConfig({
+      DATABASE_URL: "postgresql://localhost/example",
+      SESSION_SECRET: "x".repeat(32),
+      CREDENTIALS_KEY: Buffer.alloc(32).toString("base64"),
+      ...(value === undefined ? {} : { PUBLIC_BASE_PATH: value }),
+    }).cookiePath;
+
+  it("scopes the cookies to the site root by default", () => {
+    expect(cookiePath()).toBe("/");
+    expect(cookiePath("/")).toBe("/");
+    expect(cookiePath("")).toBe("/");
+  });
+
+  it("drops trailing slashes from a path", () => {
+    expect(cookiePath("/cs409/")).toBe("/cs409");
+    expect(cookiePath(" /apps/cs409 ")).toBe("/apps/cs409");
+  });
+
+  it.each([["cs409"], ["/cs409?x=1"], ["/a/../b"], ["//cs409"], ["/cs 409"], ["/cs409;Domain=example.com"]])(
+    "refuses %s",
+    (value) => {
+      expect(() => cookiePath(value)).toThrow(/PUBLIC_BASE_PATH/);
+    },
+  );
+});
 
 describe("canvasOrigin", () => {
   it("reduces a pasted Canvas page to its https origin", () => {
