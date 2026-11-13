@@ -1,10 +1,15 @@
 import { Router } from "express";
 import { z } from "zod";
 import { currentAuth } from "../auth/middleware.js";
+import { CanvasError, openToken } from "../canvas/client.js";
+import { findSyllabus, sampleSyllabus } from "../canvas/syllabus.js";
 import type { Db } from "../db.js";
+import { isDemo } from "../demo/accounts.js";
 import type { Course } from "../generated/prisma/client.js";
 import { HttpError } from "../http/errors.js";
 import { idParam, parseQuery } from "../http/params.js";
+import type { Services } from "../services.js";
+import { notConnected } from "./canvas.js";
 import { openTaskWhere, presentCourse, type CourseCounts } from "./present.js";
 
 const listQuery = z.object({
@@ -34,7 +39,7 @@ async function countsFor(db: Db, userId: string, courseIds: number[]): Promise<M
   );
 }
 
-export function coursesRouter(db: Db): Router {
+export function coursesRouter(db: Db, services: Services): Router {
   const router = Router();
 
   async function presentOne(userId: string, course: Course) {
@@ -58,6 +63,38 @@ export function coursesRouter(db: Db): Router {
     const course = await db.course.findFirst({ where: { id: idParam(req.params.id, courseNotFound()), userId } });
     if (!course) throw courseNotFound();
     res.json(await presentOne(userId, course));
+  });
+
+  /**
+   * The course syllabus, found wherever the instructor put it (see canvas/syllabus.ts). It is read
+   * from Canvas on request with the user's token and not stored.
+   */
+  router.get("/:id/syllabus", async (req, res) => {
+    const { user } = currentAuth(res.locals);
+    const userId = user.id;
+    const course = await db.course.findFirst({ where: { id: idParam(req.params.id, courseNotFound()), userId } });
+    if (!course) throw courseNotFound();
+    if (isDemo(user)) {
+      res.json(sampleSyllabus(course.htmlUrl));
+      return;
+    }
+    const connection = await db.canvasConnection.findUnique({ where: { userId } });
+    if (!connection) throw notConnected();
+    const files = await db.courseFile.findMany({
+      where: { userId, courseId: course.id, removedAt: null },
+      select: { id: true, canvasId: true, displayName: true },
+    });
+    try {
+      const client = services.canvas(connection.baseUrl, openToken(services.secrets, connection.tokenCiphertext, userId));
+      res.json(await findSyllabus(client, course.canvasId, course.htmlUrl, files));
+    } catch (error) {
+      if (!(error instanceof CanvasError)) throw error;
+      if (error.kind === "TOKEN_REJECTED") {
+        await db.canvasConnection.updateMany({ where: { userId }, data: { status: "TOKEN_REJECTED" } });
+        throw new HttpError(409, "CANVAS_RECONNECT_REQUIRED", "Canvas no longer accepts your access token. Reconnect Canvas in Settings.");
+      }
+      throw new HttpError(502, "CANVAS_UNAVAILABLE", error.message);
+    }
   });
 
   /** Archiving hides a finished course from lists; syncing keeps it up to date. */

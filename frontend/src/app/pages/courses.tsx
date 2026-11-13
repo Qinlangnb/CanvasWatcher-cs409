@@ -7,6 +7,7 @@ import { BookIcon, ClipboardIcon, FolderIcon, PlusIcon } from "../icons";
 import { CourseCard, FileTable, GroupedTasks } from "../lists";
 import { useArchiveCourse, useCourse, useCourses, useFiles, useTasks } from "../queries";
 import { useNow } from "../shell";
+import { CourseSyllabus } from "../syllabus";
 import { useTaskEditor } from "../tasks";
 import { useToast } from "../toast";
 import { Alert, EmptyState, LoadMoreButton, PageHeader, QueryError, SkeletonList, Spinner, usePages } from "../ui";
@@ -65,6 +66,7 @@ const TABS = [
   { id: "tasks", label: "Tasks" },
   { id: "changes", label: "Changes" },
   { id: "files", label: "Files" },
+  { id: "syllabus", label: "Syllabus" },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
 
@@ -244,6 +246,7 @@ export function CourseDetailPage() {
           </>
         ) : null}
         {tab === "files" ? <CourseFiles courseId={data.id} /> : null}
+        {tab === "syllabus" ? <CourseSyllabus courseId={data.id} /> : null}
       </section>
     </div>
   );

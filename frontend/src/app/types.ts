@@ -117,6 +117,28 @@ export interface FilePage {
   next_cursor: string | null;
 }
 
+/** Canvas rich content split into blocks; tables keep their rows so exam names stay next to their dates. */
+export type SyllabusBlock =
+  | { type: "heading"; level: number; text: string }
+  | { type: "text"; text: string }
+  | { type: "table"; rows: string[][]; header_rows: number; row_headers: boolean; caption?: string };
+
+export interface SyllabusSource {
+  kind: "syllabus" | "page" | "file" | "link";
+  title: string;
+  html_url: string | null;
+  download_url: string | null;
+  updated_at: string | null;
+  /** Why this was picked, for example "linked from the Canvas Syllabus tab". */
+  reasons: string[];
+  blocks: SyllabusBlock[];
+}
+
+export interface Syllabus {
+  found: boolean;
+  sources: SyllabusSource[];
+}
+
 export type ChangeKind = "assignment" | "file" | "announcement";
 
 export interface Change {

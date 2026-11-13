@@ -16,6 +16,7 @@ import type {
   FilePage,
   NewTask,
   PlanSettings,
+  Syllabus,
   SyncRun,
   Task,
   TaskChanges,
@@ -37,6 +38,7 @@ export const keys = {
   latestRun: ["sync-run", "latest"] as const,
   courses: (archived: boolean) => ["courses", { archived }] as const,
   course: (id: number) => ["courses", id] as const,
+  syllabus: (id: number) => ["courses", id, "syllabus"] as const,
   tasks: (params: TaskQuery) => ["tasks", params] as const,
   today: ["today"] as const,
   settings: ["settings"] as const,
@@ -282,6 +284,16 @@ export function useCourse(id: number) {
     queryFn: () => request<Course>(`/api/courses/${id}`),
     enabled: id > 0,
     retry: (count, error) => !isApiError(error, 404) && count < 2,
+  });
+}
+
+/** Read from Canvas on request, so it is kept for a few minutes instead of refetched on every visit. */
+export function useSyllabus(courseId: number) {
+  return useQuery({
+    queryKey: keys.syllabus(courseId),
+    queryFn: () => request<Syllabus>(`/api/courses/${courseId}/syllabus`),
+    staleTime: 5 * 60_000,
+    retry: (count, error) => !isApiError(error) && count < 2,
   });
 }
 

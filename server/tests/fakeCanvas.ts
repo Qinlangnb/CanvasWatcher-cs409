@@ -9,6 +9,21 @@ function json(body: unknown, status = 200, headers: Record<string, string> = {})
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
 }
 
+export interface FakePage {
+  url: string;
+  title: string;
+  body: string;
+  html_url?: string;
+  front_page?: boolean;
+  updated_at?: string;
+}
+
+export interface FakeModule {
+  id: number;
+  name: string;
+  items: { id: number; title: string; type: string; page_url?: string; content_id?: number; external_url?: string }[];
+}
+
 /** An in-memory Canvas that answers the REST calls CanvasClient makes. */
 export class FakeCanvas {
   token = CANVAS_TOKEN;
@@ -17,6 +32,10 @@ export class FakeCanvas {
   assignments = new Map<string, CanvasAssignment[]>();
   files = new Map<string, CanvasFile[]>();
   announcements = new Map<string, CanvasAnnouncement[]>();
+  /** Syllabus tab HTML per course. */
+  syllabusBodies = new Map<string, string>();
+  pages = new Map<string, FakePage[]>();
+  modules = new Map<string, FakeModule[]>();
   /** Status codes to answer for a path instead of its data, for example 403 for a hidden Files tab. */
   failures = new Map<string, number>();
   /** Rows per page; small values exercise pagination. */
@@ -32,6 +51,9 @@ export class FakeCanvas {
     this.assignments.clear();
     this.files.clear();
     this.announcements.clear();
+    this.syllabusBodies.clear();
+    this.pages.clear();
+    this.modules.clear();
     this.failures.clear();
     this.pageSize = 100;
     this.gate = null;
@@ -55,7 +77,24 @@ export class FakeCanvas {
       const courseId = url.searchParams.get("context_codes[]")?.replace(/^course_/, "") ?? "";
       return this.page(url, this.announcements.get(courseId) ?? []);
     }
-    let match = /^\/api\/v1\/courses\/([^/]+)\/assignments$/.exec(path);
+    let match = /^\/api\/v1\/courses\/([^/]+)$/.exec(path);
+    if (match) {
+      const course = this.courses.find((row) => String(row.id) === match?.[1]);
+      if (!course) return json({ errors: [{ message: "not found" }] }, 404);
+      const withSyllabus = url.searchParams.getAll("include[]").includes("syllabus_body");
+      return json({ ...course, ...(withSyllabus ? { syllabus_body: this.syllabusBodies.get(match[1] as string) ?? null } : {}) });
+    }
+    match = /^\/api\/v1\/courses\/([^/]+)\/pages$/.exec(path);
+    if (match) return this.page(url, (this.pages.get(match[1] as string) ?? []).map(({ body: _body, ...page }) => page));
+    match = /^\/api\/v1\/courses\/([^/]+)\/pages\/([^/]+)$/.exec(path);
+    if (match) {
+      const slug = decodeURIComponent(match[2] as string);
+      const page = (this.pages.get(match[1] as string) ?? []).find((row) => row.url === slug);
+      return page ? json(page) : json({ errors: [{ message: "not found" }] }, 404);
+    }
+    match = /^\/api\/v1\/courses\/([^/]+)\/modules$/.exec(path);
+    if (match) return this.page(url, this.modules.get(match[1] as string) ?? []);
+    match = /^\/api\/v1\/courses\/([^/]+)\/assignments$/.exec(path);
     if (match) return this.page(url, this.assignments.get(match[1] as string) ?? []);
     match = /^\/api\/v1\/courses\/([^/]+)\/files$/.exec(path);
     if (match) return this.page(url, this.files.get(match[1] as string) ?? []);

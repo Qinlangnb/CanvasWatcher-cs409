@@ -3032,6 +3032,196 @@ body:has(.tabbar) .toast-region {
   }
 }
 
+/* Wide screens: Due next week as cards side by side, in due order from left to right. Cards in a
+   row share one height until a task opens; the opened task grows in its own column only. */
+.due-soon {
+  container: due-soon / inline-size;
+}
+
+@container due-soon (min-width: 540px) {
+  .due-soon-list {
+    grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+    gap: 10px;
+    align-items: start;
+  }
+
+  .due-soon-list:not(:has(> .due-soon-item.expanded)) {
+    align-items: stretch;
+  }
+
+  .due-soon-item,
+  .due-soon-item:last-child {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+
+  .due-soon-list:not(:has(> .due-soon-item.expanded)) .due-soon-row {
+    height: 100%;
+  }
+
+  .due-soon-row {
+    grid-template-areas:
+      "day meta chevron"
+      "main main chevron";
+    grid-template-columns: max-content minmax(0, 1fr) 20px;
+    align-content: start;
+    gap: 4px 8px;
+    padding: 10px 12px;
+  }
+
+  .due-soon-title {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .due-soon-panel {
+    padding: 0 8px 8px;
+  }
+}
+
+/* --- Syllabus --- */
+
+.syllabus {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.syllabus-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.syllabus-source {
+  display: grid;
+  gap: 2px;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.syllabus-source[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.syllabus-source-kind {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.syllabus-source-title {
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.syllabus-card {
+  min-width: 0;
+}
+
+.syllabus-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.syllabus-head > div {
+  min-width: 0;
+}
+
+.syllabus-head h2 {
+  margin: 2px 0 4px;
+  font-size: 1.25rem;
+  overflow-wrap: anywhere;
+}
+
+.syllabus-why {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.syllabus-body {
+  max-width: 72rem;
+}
+
+.syllabus-body h3 {
+  margin: 20px 0 8px;
+  font-size: 1.1rem;
+}
+
+.syllabus-body h4 {
+  margin: 16px 0 6px;
+  font-size: 1rem;
+}
+
+.syllabus-body > :first-child {
+  margin-top: 0;
+}
+
+.syllabus-body p {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+
+.syllabus-table-wrap {
+  max-width: 100%;
+  margin: 8px 0 16px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.syllabus-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.syllabus-table caption {
+  padding: 8px 12px;
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.syllabus-table th,
+.syllabus-table td {
+  min-width: 6rem;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.syllabus-table tr:last-child > * {
+  border-bottom: 0;
+}
+
+.syllabus-table thead th {
+  background: var(--surface-2);
+  font-weight: 650;
+}
+
+.syllabus-table tbody th {
+  font-weight: 650;
+}
+
 /* --- Motion --- */
 
 @media (prefers-reduced-motion: reduce) {
