@@ -192,6 +192,13 @@ export const ClockIcon = (p: IconProps) => (
   </Icon>
 );
 
+export const LockIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="5" y="11" width="14" height="10" rx="2" />
+    <path d="M8 11V7a4 4 0 0 1 8 0v4" />
+  </Icon>
+);
+
 export const LogoMark = ({ size = 28 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" focusable="false">
     <rect width="32" height="32" rx="9" fill="var(--accent)" />

@@ -376,7 +376,7 @@ export function TodayPage() {
   const zone = plan?.time_zone;
   const firstSync = connection.data?.syncing && !connection.data.last_synced_at;
   const plannedCount = plan?.items.filter((item) => item.planned_minutes > 0).length ?? 0;
-  // Demo accounts and Canvas users have a real name; the username is the fallback.
+  // Canvas users (and previews) have a real name; the username is the fallback.
   const name = connection.data?.canvas_user_name || me.data?.username || "";
 
   return (

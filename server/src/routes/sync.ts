@@ -3,7 +3,7 @@ import { z } from "zod";
 import { currentAuth } from "../auth/middleware.js";
 import { enforce } from "../auth/throttle.js";
 import type { Db } from "../db.js";
-import { demoSync, isDemo } from "../demo/accounts.js";
+import { isPreview, previewUnavailable } from "../preview/accounts.js";
 import { HttpError } from "../http/errors.js";
 import type { Services } from "../services.js";
 import { notConnected } from "./canvas.js";
@@ -18,6 +18,8 @@ export function syncRouter(db: Db, services: Services): Router {
   /** Starts a sync, or returns the one already running. Poll the Location until it finishes. */
   router.post("/", async (_req, res) => {
     const { user } = currentAuth(res.locals);
+    // A preview copies someone's synced data but has no Canvas token to sync with.
+    if (isPreview(user)) throw previewUnavailable();
     const userId = user.id;
     const connection = await db.canvasConnection.findUnique({ where: { userId } });
     if (!connection) throw notConnected();
@@ -33,12 +35,6 @@ export function syncRouter(db: Db, services: Services): Router {
       [{ key: `sync:${userId}`, limit: 30, windowMs: HOUR }],
       "You have synced many times this hour. CanvasWatcher also syncs on its own; try again later.",
     );
-    if (isDemo(user)) {
-      // Demo data never changes: the sync succeeds at once with nothing new.
-      const run = await demoSync(db, userId);
-      res.status(202).location(`/api/sync/runs/${run.id}`).json(presentRun(run));
-      return;
-    }
     const result = await services.sync.start(userId, "MANUAL");
     if (!result) throw notConnected();
     res.status(202).location(`/api/sync/runs/${result.run.id}`).json(presentRun(result.run));

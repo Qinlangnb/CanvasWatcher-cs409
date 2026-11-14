@@ -5,11 +5,11 @@ export interface User {
   username: string;
   email: string;
   created_at: string;
-  /** Set for demo accounts: when the account and its sample data are deleted. */
-  demo_expires_at: string | null;
+  /** Set for preview accounts: when the account and its copy of the data are deleted. */
+  preview_expires_at: string | null;
 }
 
-export interface DemoAvailability {
+export interface PreviewAvailability {
   enabled: boolean;
   lifetime_days: number;
 }

@@ -2,12 +2,12 @@ import { Router } from "express";
 import { z } from "zod";
 import { currentAuth } from "../auth/middleware.js";
 import { CanvasError, openToken } from "../canvas/client.js";
-import { findSyllabus, sampleSyllabus } from "../canvas/syllabus.js";
+import { findSyllabus } from "../canvas/syllabus.js";
 import type { Db } from "../db.js";
-import { isDemo } from "../demo/accounts.js";
 import type { Course } from "../generated/prisma/client.js";
 import { HttpError } from "../http/errors.js";
 import { idParam, parseQuery } from "../http/params.js";
+import { isPreview, previewUnavailable } from "../preview/accounts.js";
 import type { Services } from "../services.js";
 import { notConnected } from "./canvas.js";
 import { openTaskWhere, presentCourse, type CourseCounts } from "./present.js";
@@ -74,10 +74,8 @@ export function coursesRouter(db: Db, services: Services): Router {
     const userId = user.id;
     const course = await db.course.findFirst({ where: { id: idParam(req.params.id, courseNotFound()), userId } });
     if (!course) throw courseNotFound();
-    if (isDemo(user)) {
-      res.json(sampleSyllabus(course.htmlUrl));
-      return;
-    }
+    // The syllabus is read from Canvas each time, and a preview has no Canvas token.
+    if (isPreview(user)) throw previewUnavailable();
     const connection = await db.canvasConnection.findUnique({ where: { userId } });
     if (!connection) throw notConnected();
     const files = await db.courseFile.findMany({

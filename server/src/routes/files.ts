@@ -3,10 +3,10 @@ import { z } from "zod";
 import { currentAuth } from "../auth/middleware.js";
 import { CanvasError, openToken } from "../canvas/client.js";
 import type { Db } from "../db.js";
-import { demoFile, isDemo } from "../demo/accounts.js";
 import type { Prisma } from "../generated/prisma/client.js";
 import { HttpError } from "../http/errors.js";
 import { idParam, parseQuery } from "../http/params.js";
+import { isPreview, previewUnavailable } from "../preview/accounts.js";
 import type { Services } from "../services.js";
 import { notConnected } from "./canvas.js";
 import { courseSummarySelect, presentFile } from "./present.js";
@@ -81,7 +81,7 @@ export function filesRouter(db: Db, services: Services): Router {
       include: { course: { select: { canvasId: true } } },
     });
     if (!file) throw fileNotFound();
-    if (isDemo(user)) throw demoFile();
+    if (isPreview(user)) throw previewUnavailable();
     const connection = await db.canvasConnection.findUnique({ where: { userId } });
     if (!connection) throw notConnected();
 

@@ -1,7 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router";
 import { ApiError } from "../api";
-import { TryDemo } from "../demo";
+import { StartPreview } from "../preview";
 import { BellIcon, ClipboardIcon, FolderIcon, LogoMark } from "../icons";
 import { useSignIn, useSignUp } from "../queries";
 import { Alert, Field, PasswordField, Spinner, usePageTitle } from "../ui";
@@ -116,7 +116,7 @@ export function SignInPage() {
           {signIn.isPending ? "Signing in…" : "Sign in"}
         </button>
       </form>
-      <TryDemo />
+      <StartPreview />
     </AuthLayout>
   );
 }

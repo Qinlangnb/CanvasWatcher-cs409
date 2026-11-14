@@ -3,7 +3,7 @@
 // outlive the row that started them.
 import { createContext, useContext, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { TASK_TYPE_LABELS, formatDue, formatMinutes, plural } from "./format";
-import { CanvasLink } from "./demo";
+import { CanvasLink } from "./preview";
 import { TASK_TYPES, defaultMinutes, isSubmitted, parseEstimate, problemsOf, remainingOf, taskChanges, taskDraft, type TaskDraft, type TaskStatus } from "./forms";
 import { browserTimeZone, useCourses, useCreateTask, useDeleteTask, usePlanZone, useUpdateTask } from "./queries";
 import { useToast } from "./toast";

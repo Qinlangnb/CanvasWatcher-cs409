@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { apiHref } from "./api";
-import { CanvasLink } from "./demo";
+import { CanvasLink, PreviewUnavailable } from "./preview";
 import { timeAgo } from "./format";
 import { BookIcon, DownloadIcon, ExternalIcon } from "./icons";
-import { useSyllabus } from "./queries";
+import { useIsPreview, useSyllabus } from "./queries";
 import type { SyllabusBlock, SyllabusSource } from "./types";
 import { EmptyState, QueryError, SkeletonList } from "./ui";
 
@@ -110,6 +110,16 @@ function SourceCard({ source }: { source: SyllabusSource }) {
 
 /** The course syllabus, wherever the instructor put it: Syllabus tab, a page, a file or a module link. */
 export function CourseSyllabus({ courseId }: { courseId: number }) {
+  // The syllabus is read from Canvas when it is opened, and a preview has no Canvas token.
+  if (useIsPreview()) {
+    return (
+      <PreviewUnavailable>The syllabus is read from Canvas when you open it. In your own account it shows here.</PreviewUnavailable>
+    );
+  }
+  return <SyllabusFromCanvas courseId={courseId} />;
+}
+
+function SyllabusFromCanvas({ courseId }: { courseId: number }) {
   const syllabus = useSyllabus(courseId);
   const [picked, setPicked] = useState(0);
   if (syllabus.isPending) return <SkeletonList rows={4} label="Looking for the syllabus" />;

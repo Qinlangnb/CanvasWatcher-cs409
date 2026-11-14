@@ -41,8 +41,8 @@ export async function findSession(db: Db, token: string, now = new Date()): Prom
     include: { user: true },
   });
   if (!session || session.expiresAt <= now) return null;
-  // An expired demo account is about to be deleted; it no longer signs anyone in.
-  if (session.user.demoExpiresAt && session.user.demoExpiresAt <= now) return null;
+  // An expired preview account is about to be deleted; it no longer signs anyone in.
+  if (session.user.previewExpiresAt && session.user.previewExpiresAt <= now) return null;
   if (now.getTime() - session.lastSeenAt.getTime() >= TOUCH_INTERVAL) {
     const expiresAt = expiryFor(session.createdAt, now);
     await db.session.update({ where: { id: session.id }, data: { lastSeenAt: now, expiresAt } });

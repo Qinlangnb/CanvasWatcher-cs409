@@ -11,7 +11,7 @@ import { calendarRouter, isIcsUpload } from "./routes/calendar.js";
 import { canvasRouter } from "./routes/canvas.js";
 import { changesRouter } from "./routes/changes.js";
 import { coursesRouter } from "./routes/courses.js";
-import { demoRouter } from "./routes/demo.js";
+import { previewRouter } from "./routes/preview.js";
 import { filesRouter } from "./routes/files.js";
 import { sessionsRouter } from "./routes/sessions.js";
 import { settingsRouter } from "./routes/settings.js";
@@ -55,7 +55,7 @@ export function createApp({ config, db, logger, services }: AppDependencies): Ex
   app.use("/api", originGuard(config), loadSession(db), csrfGuard(config));
   app.use("/api/users", usersRouter(db, config));
   app.use("/api/sessions", sessionsRouter(db, config));
-  app.use("/api/demo", demoRouter(db, config));
+  app.use("/api/preview", previewRouter(db, config));
   // Everything below belongs to the signed-in user and is always queried with their id.
   app.use("/api/canvas", requireUser, canvasRouter(db, config, services));
   app.use("/api/sync", requireUser, syncRouter(db, services));

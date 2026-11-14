@@ -7,7 +7,7 @@ import { CanvasAddressError, canvasOrigin } from "../canvas/hosts.js";
 import type { CanvasUser } from "../canvas/types.js";
 import type { Config } from "../config.js";
 import type { Db } from "../db.js";
-import { demoForbidden, isDemo } from "../demo/accounts.js";
+import { isPreview, previewUnavailable } from "../preview/accounts.js";
 import { FieldError, HttpError } from "../http/errors.js";
 import type { Services } from "../services.js";
 import { presentConnection, presentRun } from "./present.js";
@@ -18,7 +18,6 @@ const connect = z.object({
 });
 
 const HOUR = 60 * 60_000;
-const DEMO_CANVAS = "Demo accounts use sample data and can't connect Canvas. Create an account to connect your own.";
 
 export const notConnected = () =>
   new HttpError(404, "CANVAS_NOT_CONNECTED", "Connect your Canvas account to get started.");
@@ -35,7 +34,7 @@ export function canvasRouter(db: Db, config: Config, services: Services): Router
   /** Connects Canvas, or replaces the token. The token is checked with Canvas before it is stored. */
   router.put("/connection", async (req, res) => {
     const { user } = currentAuth(res.locals);
-    if (isDemo(user)) throw demoForbidden(DEMO_CANVAS);
+    if (isPreview(user)) throw previewUnavailable();
     const userId = user.id;
     const body = connect.parse(req.body ?? {});
     await enforce(
@@ -91,7 +90,7 @@ export function canvasRouter(db: Db, config: Config, services: Services): Router
   /** Forgets the token and everything synced from Canvas. */
   router.delete("/connection", async (_req, res) => {
     const { user } = currentAuth(res.locals);
-    if (isDemo(user)) throw demoForbidden(DEMO_CANVAS);
+    if (isPreview(user)) throw previewUnavailable();
     const userId = user.id;
     await db.$transaction([
       db.canvasConnection.deleteMany({ where: { userId } }),

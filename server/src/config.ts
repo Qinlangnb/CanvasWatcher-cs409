@@ -40,8 +40,11 @@ const environment = z.object({
   /** Number of reverse proxies in front of the API, used to find the client address. */
   TRUST_PROXY: z.coerce.number().int().min(0).default(0),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
-  /** Lets visitors start a demo account with sample data, for example for usability evaluations. */
-  DEMO_ACCOUNTS: z.enum(["true", "false"]).default("false"),
+  /**
+   * Username of the account whose data the sign-in page's Preview button copies, with that person's
+   * identity taken out. Empty turns previews off.
+   */
+  PREVIEW_SOURCE_USERNAME: z.string().trim().max(64).default(""),
 });
 
 export interface Config {
@@ -58,7 +61,8 @@ export interface Config {
   cookiePath: string;
   trustProxy: number;
   logLevel: string;
-  demoAccounts: boolean;
+  /** Username previews copy, or null when previews are off. */
+  previewSource: string | null;
 }
 
 function list(value: string): string[] {
@@ -91,6 +95,6 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     cookiePath: normalizeBasePath(values.PUBLIC_BASE_PATH) || "/",
     trustProxy: values.TRUST_PROXY,
     logLevel: values.LOG_LEVEL,
-    demoAccounts: values.DEMO_ACCOUNTS === "true",
+    previewSource: values.PREVIEW_SOURCE_USERNAME || null,
   };
 }

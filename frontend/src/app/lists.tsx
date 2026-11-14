@@ -16,11 +16,10 @@ import {
   plural,
   timeAgo,
 } from "./format";
-import { CanvasLink } from "./demo";
+import { CanvasLink, UnavailableButton } from "./preview";
 import { ClipboardIcon, DownloadIcon, FileIcon, MegaphoneIcon } from "./icons";
-import { useChange, useIsDemo, useMarkRead, usePlanZone } from "./queries";
+import { useChange, useIsPreview, useMarkRead, usePlanZone } from "./queries";
 import { TaskCheck, useTaskEditor } from "./tasks";
-import { useToast } from "./toast";
 import type { Change, ChangeKind, ContentValue, Course, CourseFile, Task } from "./types";
 import { Badge, Dialog, QueryError, SkeletonList } from "./ui";
 
@@ -329,10 +328,9 @@ export function ChangeDialog({ id, onClose }: { id: number | null; onClose: () =
 
 // --- Files ---
 
-/** Downloads come from Canvas; a demo's files are only names, so there it explains instead. */
+/** Downloads come from Canvas each time, which a preview can't reach, so there the button is greyed out. */
 function DownloadButton({ file }: { file: CourseFile }) {
-  const demo = useIsDemo();
-  const toast = useToast();
+  const preview = useIsPreview();
   const label = (
     <>
       <DownloadIcon size={16} />
@@ -340,17 +338,7 @@ function DownloadButton({ file }: { file: CourseFile }) {
       <span className="visually-hidden"> {file.name}</span>
     </>
   );
-  if (demo) {
-    return (
-      <button
-        type="button"
-        className="button small secondary"
-        onClick={() => toast("Demo files are samples with nothing to download. In your own account this downloads from Canvas.", "info")}
-      >
-        {label}
-      </button>
-    );
-  }
+  if (preview) return <UnavailableButton className="button small secondary">{label}</UnavailableButton>;
   return (
     <a className="button small secondary" href={apiHref(file.download_url)} target="_blank" rel="noreferrer">
       {label}

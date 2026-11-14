@@ -11,7 +11,7 @@ import type {
   ChangePage,
   Course,
   CourseFile,
-  DemoAvailability,
+  PreviewAvailability,
   EventFields,
   FilePage,
   NewTask,
@@ -76,9 +76,9 @@ export function useMe() {
   });
 }
 
-/** True while a demo account is signed in. */
-export function useIsDemo(): boolean {
-  return Boolean(useMe().data?.demo_expires_at);
+/** True while a preview account is signed in: a copy of someone's data, with no Canvas token. */
+export function useIsPreview(): boolean {
+  return Boolean(useMe().data?.preview_expires_at);
 }
 
 /**
@@ -133,35 +133,35 @@ export function useSignOut() {
   });
 }
 
-// --- Demo accounts ---
+// --- Preview accounts ---
 
-/** Whether this server offers demo accounts; any failure reads as "no". */
-export function useDemoAvailability() {
+/** Whether this server offers a preview; any failure reads as "no". */
+export function usePreviewAvailability() {
   return useQuery({
-    queryKey: ["demo"],
-    queryFn: () => request<DemoAvailability>("/api/demo").catch(() => ({ enabled: false, lifetime_days: 0 })),
+    queryKey: ["preview"],
+    queryFn: () => request<PreviewAvailability>("/api/preview").catch(() => ({ enabled: false, lifetime_days: 0 })),
     staleTime: Infinity,
     retry: false,
   });
 }
 
-/** Creates a demo account with sample data and signs in to it. */
-export function useStartDemo() {
+/** Creates a preview account with its own copy of the preview data and signs in to it. */
+export function useStartPreview() {
   const signedIn = useSignedIn();
   return useMutation({
-    mutationFn: () => request<User>("/api/demo", { method: "POST" }),
+    mutationFn: () => request<User>("/api/preview", { method: "POST" }),
     onSuccess: signedIn,
   });
 }
 
 /**
- * Puts the demo's sample data back; every list is fetched again. Invalidated rather than reset, so the
+ * Copies the preview data again, dropping the visitor's edits; every list is fetched again. Invalidated rather than reset, so the
  * shell keeps its data meanwhile instead of unmounting into a loader.
  */
-export function useResetDemo() {
+export function useResetPreview() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: () => request<void>("/api/demo/reset", { method: "POST" }),
+    mutationFn: () => request<void>("/api/preview/reset", { method: "POST" }),
     onSuccess: () => client.invalidateQueries({ predicate: (query) => query.queryKey[0] !== keys.me[0] }),
   });
 }
@@ -248,7 +248,7 @@ export function useSync(onFinished?: (run: SyncRun) => void) {
     previous.current = run;
     if (!finished.current || !run || run.status === "running") return;
     const sawItRun = before?.id === run.id && before.status === "running";
-    // A manual sync that was already over when it arrived, such as a demo account's instant one.
+    // A manual sync that was already over when it arrived.
     const arrivedFinished = before !== undefined && before?.id !== run.id && run.trigger === "manual";
     if (sawItRun || arrivedFinished) {
       invalidateCanvasData(client);

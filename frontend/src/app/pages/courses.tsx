@@ -2,7 +2,7 @@ import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { isApiError } from "../api";
 import { plural } from "../format";
-import { CanvasLink } from "../demo";
+import { CanvasLink } from "../preview";
 import { BookIcon, ClipboardIcon, FolderIcon, PlusIcon } from "../icons";
 import { CourseCard, FileTable, GroupedTasks } from "../lists";
 import { useArchiveCourse, useCourse, useCourses, useFiles, useTasks } from "../queries";

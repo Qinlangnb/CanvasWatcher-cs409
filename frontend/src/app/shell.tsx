@@ -1,10 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router";
 import { isApiError } from "./api";
-import { DemoBanner } from "./demo";
+import { PREVIEW_UNAVAILABLE, PreviewBanner, UnavailableButton } from "./preview";
 import { syncOutcome, timeAgo, type SyncOutcome } from "./format";
 import { AlertIcon, BellIcon, BookIcon, CalendarIcon, CheckIcon, FolderIcon, GearIcon, LogoMark, SunIcon, SyncIcon } from "./icons";
-import { useConnection, useMe, useSync, useUnreadCount } from "./queries";
+import { useConnection, useIsPreview, useMe, useSync, useUnreadCount } from "./queries";
 import { TaskEditorProvider } from "./tasks";
 import { useToast } from "./toast";
 import { Alert, Spinner, useFocusHeading } from "./ui";
@@ -85,7 +85,35 @@ const DOT = { success: "ok", warning: "warn", danger: "bad" } as const;
 /** How long the Sync button shows the result of the sync it just ran. */
 const RESULT_MS = 4000;
 
+/** A preview has no Canvas token, so its Sync button is greyed out. */
+function PreviewSyncControl({ compact }: { compact: boolean }) {
+  if (compact) {
+    return (
+      <UnavailableButton className="icon-button sync-icon-button">
+        <SyncIcon />
+      </UnavailableButton>
+    );
+  }
+  return (
+    <div className="sync-panel">
+      <p className="sync-status">
+        <span className="status-dot" aria-hidden="true" />
+        {PREVIEW_UNAVAILABLE}
+      </p>
+      <UnavailableButton className="button secondary full">
+        <SyncIcon size={18} />
+        Sync now
+      </UnavailableButton>
+    </div>
+  );
+}
+
 function SyncControl({ compact = false }: { compact?: boolean }) {
+  const preview = useIsPreview();
+  return preview ? <PreviewSyncControl compact={compact} /> : <CanvasSyncControl compact={compact} />;
+}
+
+function CanvasSyncControl({ compact }: { compact: boolean }) {
   const toast = useToast();
   const connection = useConnection();
   const now = useNow(30_000);
@@ -236,7 +264,7 @@ export function AppShell() {
         </header>
 
         <main id="main" className="main" tabIndex={-1}>
-          <DemoBanner />
+          <PreviewBanner />
           {rejected ? (
             <div className="banner">
               <Alert

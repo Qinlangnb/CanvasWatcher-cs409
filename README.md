@@ -18,7 +18,7 @@ CanvasWatcher collects course materials, deadlines, tasks, and meaningful change
 | Canvas connection, manual and scheduled sync | Done (week 2), tested against a fake Canvas server |
 | Courses, tasks, files, changes (read, mark read, archive) | Done (week 2) |
 | Today plan, Timeline, Calendar (.ics import, own events), study settings, task edits | Done (week 3), with tests |
-| Demo accounts, change-feed indexes, file paging | Done (week 4), with tests; before/after query measurements in [performance.md](docs/cs409/performance.md) |
+| Preview accounts (replaced the week-4 sample-data demos), change-feed indexes, file paging | Done (week 4, preview later), with tests; before/after query measurements in [performance.md](docs/cs409/performance.md) |
 | Due next week on Today (start work before the plan reaches it), sync results on screen | Done (week 4, before round 1), with tests |
 | Heuristic evaluation | Round 1 kit ready in [heuristic-evaluation.md](docs/cs409/heuristic-evaluation.md); not run yet |
 | Frontend | Rewritten in `frontend/src/app` with React Router: sign-in, sign-up, onboarding, Today, Calendar (week and timeline views), Courses, Changes, Files, Settings. The previous interface was deleted in week 3 |
@@ -32,10 +32,10 @@ CanvasWatcher collects course materials, deadlines, tasks, and meaningful change
 | `GET /api/users/me` | The signed-in user | 200 |
 | `PUT /api/users/me/password` | Change the password; signs out other devices | 204 |
 | `POST /api/sessions` | Sign in with username or email | 201 |
-| `DELETE /api/sessions/current` | Sign out this browser (signing out of a demo deletes it) | 204 |
-| `GET /api/demo` | Whether this server offers demo accounts | 200 |
-| `POST /api/demo` | Signed out only: create a demo account with sample data and sign in (10 per network per hour) | 201 |
-| `POST /api/demo/reset` | Demo accounts only: put the sample data back | 204 |
+| `DELETE /api/sessions/current` | Sign out this browser (signing out of a preview deletes it) | 204 |
+| `GET /api/preview` | Whether this server offers a preview | 200 |
+| `POST /api/preview` | Signed out only: create a preview account with a scrubbed copy of the preview data and sign in (10 per network per hour) | 201 |
+| `POST /api/preview/reset` | Preview accounts only: copy the preview data again | 204 |
 | `GET /api/canvas/connection` | Canvas site, account, status and last sync | 200 |
 | `PUT /api/canvas/connection` | Check a Canvas access token, store it encrypted, start the first sync | 200 |
 | `DELETE /api/canvas/connection` | Delete the token and everything synced | 204 |
@@ -58,15 +58,14 @@ CanvasWatcher collects course materials, deadlines, tasks, and meaningful change
 | `GET /api/changes/unread-count`, `POST /api/changes/mark-all-read` | Unread badge; mark all (or one course) read | 200 |
 | `GET /api/changes/{id}`, `PATCH /api/changes/{id}` | One change with before/after values; set `read` | 200 |
 
-**Demo accounts** let people without a Canvas token try the app (for example heuristic evaluators). They are off unless `DEMO_ACCOUNTS=true`, which `docker-compose.yml` sets.
+**Preview accounts** let people without an account or Canvas token look around with real course data (for example heuristic evaluators). They are off unless `PREVIEW_SOURCE_USERNAME` names an existing account on the server, the *template*.
 
-- Each **Try a demo** click creates a separate account with no password, filled with sample courses, tasks, files, changes and calendar events dated around the current day.
-- The account is deleted when its user ends the demo, or after 7 days.
-- A demo never contacts Canvas:
-  - Sync finishes at once.
-  - Downloads return 409 `DEMO_FILE`.
-  - Connecting Canvas and changing the password return 403 `DEMO_ACCOUNT`.
-  - The scheduler skips demo accounts.
+- Each **Preview** click on the sign-in page creates a separate account with no password, holding a copy of the template's courses, tasks (personal ones and notes too), files, changes, calendar and settings.
+- The copy has the template's identity taken out: their email, username, Canvas name (and each word of it) and Canvas user id are replaced in every copied text and before/after value. Other personal details typed into tasks or events are copied as they are.
+- Everything else works on the copy as in any account, and edits never reach the template. **Reset** copies the template again.
+- The account is deleted when its user ends the preview, or after 7 days.
+- A preview has no Canvas token and never contacts Canvas. Connecting or disconnecting Canvas, syncing, downloads, the syllabus and password changes return 403 `PREVIEW_ACCOUNT` ("Preview account not available."); the interface greys those out. The scheduler skips preview accounts.
+- The data is as fresh as the template's last sync.
 
 Only `canvas.illinois.edu` and `*.instructure.com` can be connected by default (`CANVAS_ALLOWED_HOSTS`). Each account syncs every `SYNC_INTERVAL_MINUTES` (default 30) while connected; a token Canvas rejects stops automatic syncs until the user reconnects.
 
@@ -100,7 +99,7 @@ npm run dev                      # API on http://localhost:8000, restarts on sav
 
 In another terminal, `cd frontend && npm install && npm run dev` serves the UI on `http://localhost:5173` and proxies `/api` to `localhost:8000` (override with `VITE_API_PROXY`).
 
-`server/.env.example` turns demo accounts off. Set `DEMO_ACCOUNTS=true` in `server/.env` to get **Try a demo** on the sign-in page while developing; the Docker stack turns them on by default.
+`server/.env.example` turns previews off. Set `PREVIEW_SOURCE_USERNAME` in `server/.env` (or in the root `.env` for the Docker stack) to a connected account's username to get **Preview** on the sign-in page.
 
 | Command (in `server/`) | Does |
 | --- | --- |
@@ -116,8 +115,8 @@ CI (`.github/workflows/ci.yml`) runs the server checks against a PostgreSQL serv
 
 | Path | Purpose |
 | --- | --- |
-| `server/` | Node.js REST API: Express routes, Prisma schema and migrations, demo accounts (`src/demo/`), tests, query benchmark (`bench/`) |
-| `frontend/src/app/` | The React interface: `router.tsx` (routes and guards), `pages/`, shared `ui.tsx`, `queries.ts` (React Query hooks), `tasks.tsx` and `events.tsx` (editors), `demo.tsx` (demo sign-in, banner and dialogs), `forms.ts` and `zoned.ts` (pure form and time-zone helpers, unit-tested), `app.css` (design tokens, light and dark) |
+| `server/` | Node.js REST API: Express routes, Prisma schema and migrations, preview accounts (`src/preview/`), tests, query benchmark (`bench/`) |
+| `frontend/src/app/` | The React interface: `router.tsx` (routes and guards), `pages/`, shared `ui.tsx`, `queries.ts` (React Query hooks), `tasks.tsx` and `events.tsx` (editors), `preview.tsx` (Preview sign-in, banner, dialogs and greyed-out controls), `forms.ts` and `zoned.ts` (pure form and time-zone helpers, unit-tested), `app.css` (design tokens, light and dark) |
 | `docs/cs409/` | Rewrite plan, performance measurements, heuristic evaluation kit |
 | `legacy/` | The original Python backend, gateway and deployment files, kept as a porting reference |
 
