@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 import { apiHref } from "./api";
 import {
@@ -17,8 +17,9 @@ import {
   timeAgo,
 } from "./format";
 import { CanvasLink, UnavailableButton } from "./preview";
-import { ClipboardIcon, DownloadIcon, FileIcon, MegaphoneIcon } from "./icons";
+import { ChevronRightIcon, ClipboardIcon, DownloadIcon, FileIcon, MegaphoneIcon } from "./icons";
 import { useChange, useIsPreview, useMarkRead, usePlanZone } from "./queries";
+import { TaskCard } from "./taskCard";
 import { TaskCheck, useTaskEditor } from "./tasks";
 import type { Change, ChangeKind, ContentValue, Course, CourseFile, Task } from "./types";
 import { Badge, Dialog, QueryError, SkeletonList } from "./ui";
@@ -68,6 +69,7 @@ export function TaskRow({
   extra,
   showHint = true,
   anchorId,
+  details,
 }: {
   task: Task;
   now: Date;
@@ -76,20 +78,36 @@ export function TaskRow({
   /** False when `extra` already says how urgent the task is. */
   showHint?: boolean;
   anchorId?: string;
+  /** With details, the title opens the task in place instead of the editor. */
+  details?: { open: boolean; onToggle: () => void; content: ReactNode };
 }) {
   const zone = usePlanZone();
   const editor = useTaskEditor();
   const open = task.state === "open" || task.state === "overdue";
   const hint = open && showHint ? dueHint(task.due_at, now, zone) : null;
+  const panelId = `task-details-${task.id}${anchorId ? "-plan" : ""}`;
   return (
-    <li id={anchorId} className={`task-row state-${task.state}`}>
+    <li id={anchorId} className={`task-row state-${task.state}${details?.open ? " expanded" : ""}`}>
       <span className={`task-marker type-${task.type}`} aria-hidden="true" />
       <TaskCheck task={task} />
       <div className="task-main">
         <p className="task-title">
-          <button type="button" className="task-open" onClick={() => editor.open(task)}>
-            {task.title}
-          </button>
+          {details ? (
+            <button
+              type="button"
+              className="task-open"
+              onClick={details.onToggle}
+              aria-expanded={details.open}
+              aria-controls={details.open ? panelId : undefined}
+            >
+              {task.title}
+              <ChevronRightIcon size={16} className="task-open-chevron" aria-hidden="true" />
+            </button>
+          ) : (
+            <button type="button" className="task-open" onClick={() => editor.open(task)}>
+              {task.title}
+            </button>
+          )}
         </p>
         <p className="task-meta">
           {showCourse ? <span className="course-chip">{task.course.code}</span> : null}
@@ -107,16 +125,53 @@ export function TaskRow({
         {task.state === "ignored" ? <Badge>Ignored</Badge> : null}
         {hint ? <Badge tone={hint.tone}>{hint.label}</Badge> : null}
       </div>
+      {details?.open ? (
+        <div className="task-row-details" id={panelId}>
+          {details.content}
+        </div>
+      ) : null}
     </li>
   );
 }
 
-export function TaskList({ tasks, now, showCourse = true }: { tasks: Task[]; now: Date; showCourse?: boolean }) {
+/** A task row whose title opens its details (TaskCard) in place, like Today's "Due next week". */
+export function ExpandableTaskRow(props: Omit<Parameters<typeof TaskRow>[0], "details"> & { actions?: ReactNode }) {
+  const { actions, ...row } = props;
+  const zone = usePlanZone();
+  const [open, setOpen] = useState(false);
+  return (
+    <TaskRow
+      {...row}
+      details={{
+        open,
+        onToggle: () => setOpen((current) => !current),
+        content: <TaskCard task={row.task} now={row.now} zone={zone} actions={actions} />,
+      }}
+    />
+  );
+}
+
+export function TaskList({
+  tasks,
+  now,
+  showCourse = true,
+  expandable = false,
+}: {
+  tasks: Task[];
+  now: Date;
+  showCourse?: boolean;
+  /** Titles open the task in place instead of the editor. */
+  expandable?: boolean;
+}) {
   return (
     <ul className="task-list">
-      {tasks.map((task) => (
-        <TaskRow key={task.id} task={task} now={now} showCourse={showCourse} />
-      ))}
+      {tasks.map((task) =>
+        expandable ? (
+          <ExpandableTaskRow key={task.id} task={task} now={now} showCourse={showCourse} />
+        ) : (
+          <TaskRow key={task.id} task={task} now={now} showCourse={showCourse} />
+        ),
+      )}
     </ul>
   );
 }

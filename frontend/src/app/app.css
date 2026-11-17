@@ -3111,6 +3111,39 @@ body:has(.tabbar) .toast-region {
   font-size: 0.85rem;
 }
 
+/* A task opened in place under its row (Today). The marker runs down beside it. */
+.task-row-details {
+  grid-column: 2 / -1;
+  margin-top: 8px;
+}
+
+.task-row.expanded .task-marker {
+  grid-row: 1 / span 3;
+}
+
+@media (min-width: 640px) {
+  .task-row.expanded .task-marker {
+    grid-row: 1 / span 2;
+  }
+}
+
+.task-open-chevron {
+  margin-left: 4px;
+  color: var(--text-muted);
+  vertical-align: -3px;
+  transition: transform 0.15s ease-out;
+}
+
+.task-open[aria-expanded="true"] .task-open-chevron {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-open-chevron {
+    transition: none;
+  }
+}
+
 .task-row.flash {
   border-radius: var(--radius-sm);
   background: var(--accent-soft);

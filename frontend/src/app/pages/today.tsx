@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { REASON_LABELS, dayOffset, dueDayLabel, formatLongDate, formatMinutes, formatTime, hourOf, plural } from "../format";
 import { BellIcon, CalendarIcon, ChevronRightIcon, ClipboardIcon, PlusIcon } from "../icons";
-import { ChangeDialog, ChangeList, TaskList, TaskRow } from "../lists";
+import { ChangeDialog, ChangeList, ExpandableTaskRow, TaskList } from "../lists";
 import { TaskCard } from "../taskCard";
 import { useChanges, useConnection, useMe, useToday, useUpdateTask } from "../queries";
 import { useNow } from "../shell";
@@ -130,7 +130,7 @@ function PlanSection({ plan, now }: { plan: Today; now: Date }) {
       {planned.length > 0 ? (
         <ul className="task-list plan-list">
           {planned.map((item) => (
-            <TaskRow
+            <ExpandableTaskRow
               key={item.task.id}
               task={item.task}
               now={now}
@@ -151,7 +151,7 @@ function PlanSection({ plan, now }: { plan: Today; now: Date }) {
           </summary>
           <ul className="task-list">
             {waiting.map((item) => (
-              <TaskRow key={item.task.id} task={item.task} now={now} extra={<PlanNote item={item} />} showHint={!urgent(item)} />
+              <ExpandableTaskRow key={item.task.id} task={item.task} now={now} extra={<PlanNote item={item} />} showHint={!urgent(item)} />
             ))}
           </ul>
         </details>
@@ -339,7 +339,7 @@ function DoneSection({ plan, now }: { plan: Today; now: Date }) {
       {plan.done_today.length === 0 ? (
         <p className="muted">Check off tasks as you finish them. Work you hand in on Canvas shows up here after a sync.</p>
       ) : (
-        <TaskList tasks={plan.done_today} now={now} />
+        <TaskList tasks={plan.done_today} now={now} expandable />
       )}
     </section>
   );

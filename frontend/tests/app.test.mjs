@@ -268,3 +268,12 @@ test("nginx makes browsers check the page on every visit and keep hashed assets"
   assert.match(nginx, /location = \/index\.html \{\s*add_header Cache-Control "no-cache";\s*\}/);
   assert.match(nginx, /alias \/usr\/share\/nginx\/html\/assets\/\$1;\s*add_header Cache-Control "public, max-age=31536000, immutable";/);
 });
+
+test("Today's plan, the rows that don't fit and Done today open the task card in place", () => {
+  const today = read("app/pages/today.tsx");
+  const lists = read("app/lists.tsx");
+  assert.equal((today.match(/<ExpandableTaskRow/g) ?? []).length, 2);
+  assert.match(today, /<TaskList tasks=\{plan\.done_today\} now=\{now\} expandable \/>/);
+  assert.match(lists, /onClick=\{details\.onToggle\}\s*aria-expanded=\{details\.open\}/);
+  assert.match(lists, /content: <TaskCard task=\{row\.task\} now=\{row\.now\} zone=\{zone\} actions=\{actions\} \/>/);
+});
