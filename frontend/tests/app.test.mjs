@@ -262,3 +262,9 @@ test("AI Chat shows only when the server has it, renders Markdown without HTML o
   assert.match(chat, /messages: conversation\.slice\(-SENT_MESSAGES\)/);
   assert.match(chat, /sessionStorage/);
 });
+
+test("nginx makes browsers check the page on every visit and keep hashed assets", () => {
+  const nginx = readFileSync(new URL("../nginx.conf", import.meta.url), "utf8");
+  assert.match(nginx, /location = \/index\.html \{\s*add_header Cache-Control "no-cache";\s*\}/);
+  assert.match(nginx, /alias \/usr\/share\/nginx\/html\/assets\/\$1;\s*add_header Cache-Control "public, max-age=31536000, immutable";/);
+});
