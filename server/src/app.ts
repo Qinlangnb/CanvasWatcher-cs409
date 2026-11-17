@@ -11,6 +11,7 @@ import { calendarRouter, isIcsUpload } from "./routes/calendar.js";
 import { canvasRouter } from "./routes/canvas.js";
 import { changesRouter } from "./routes/changes.js";
 import { coursesRouter } from "./routes/courses.js";
+import { aiRouter } from "./routes/ai.js";
 import { previewRouter } from "./routes/preview.js";
 import { filesRouter } from "./routes/files.js";
 import { sessionsRouter } from "./routes/sessions.js";
@@ -66,6 +67,7 @@ export function createApp({ config, db, logger, services }: AppDependencies): Ex
   app.use("/api/today", requireUser, todayRouter(db));
   app.use("/api/calendar", requireUser, calendarRouter(db));
   app.use("/api/settings", requireUser, settingsRouter(db));
+  app.use("/api/ai", requireUser, aiRouter(db, services));
   app.use("/api", notFound);
   app.use(errorHandler(logger));
   return app;

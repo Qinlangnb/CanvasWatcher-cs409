@@ -1,5 +1,7 @@
 import type { Logger } from "pino";
 import { CanvasError, openToken, type CanvasClient, type CanvasClientFactory } from "../canvas/client.js";
+import { findSyllabus } from "../canvas/syllabus.js";
+import { keepSyllabus, syllabusIsStale } from "../canvas/syllabusStore.js";
 import {
   changeSummary,
   changedFields,
@@ -312,7 +314,27 @@ export class SyncService {
     for (const section of [assignments, files, announcements]) {
       if (!section.ok && section.problem) result.problems.push(`${fields.courseCode} ${section.problem}`);
     }
+    await this.refreshSyllabus(context, course, now);
     return result;
+  }
+
+  /**
+   * Looks the syllabus up again about once a day, so a copy is there for AI Chat and previews.
+   * Best effort: a syllabus that can't be read now is tried again on a later sync.
+   */
+  private async refreshSyllabus(context: SyncContext, course: { id: number; canvasId: string; htmlUrl: string }, now: Date): Promise<void> {
+    if (!(await syllabusIsStale(this.db, course.id, now))) return;
+    try {
+      const files = await this.db.courseFile.findMany({
+        where: { userId: context.userId, courseId: course.id, removedAt: null },
+        select: { id: true, canvasId: true, displayName: true },
+      });
+      const syllabus = await findSyllabus(context.client, course.canvasId, course.htmlUrl, files);
+      await keepSyllabus(this.db, context.userId, course.id, syllabus, now);
+    } catch (error) {
+      if (isFatal(error)) throw error;
+      this.logger.warn({ courseId: course.id, err: this.describe(error) }, "syllabus not refreshed");
+    }
   }
 
   private async saveTasks(tx: Prisma.TransactionClient, scope: Scope, rows: CanvasAssignment[]): Promise<void> {
@@ -328,6 +350,9 @@ export class SyncService {
         htmlUrl: assignment.html_url ?? null,
         submissionState: assignment.submission?.workflow_state ?? null,
         submittedAt: dateOrNull(assignment.submission?.submitted_at),
+        score: typeof assignment.submission?.score === "number" ? assignment.submission.score : null,
+        grade: assignment.submission?.grade ?? null,
+        excused: assignment.submission?.excused === true,
         removedAt: null,
       };
       await tx.task.upsert({

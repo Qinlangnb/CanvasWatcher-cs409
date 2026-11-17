@@ -26,7 +26,8 @@ test("everything that needs Canvas is greyed out with 'Preview account not avail
   assert.match(settings, /className="card settings-section preview-greyed" id="canvas"/);
   assert.match(shell, /preview \? <PreviewSyncControl compact=\{compact\} \/> : <CanvasSyncControl compact=\{compact\} \/>/);
   assert.match(lists, /if \(preview\) return <UnavailableButton className="button small secondary">\{label\}<\/UnavailableButton>;/);
-  assert.match(syllabus, /if \(useIsPreview\(\)\) \{\s*return \(\s*<PreviewUnavailable>/);
+  // A preview shows the syllabus copy kept from the template, and the unavailable panel without one.
+  assert.match(syllabus, /if \(preview \|\| \(syllabus\.error instanceof ApiError && syllabus\.error\.code === "PREVIEW_ACCOUNT"\)\) \{\s*return <PreviewUnavailable>/);
   assert.match(css, /\.preview-unavailable\[aria-disabled="true"\] \{[^}]*filter: grayscale\(1\);/);
 });
 

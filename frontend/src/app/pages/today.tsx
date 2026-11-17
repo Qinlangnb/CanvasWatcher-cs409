@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { REASON_LABELS, dayOffset, dueDayLabel, formatLongDate, formatMinutes, formatTime, hourOf, plural } from "../format";
 import { BellIcon, CalendarIcon, ChevronRightIcon, ClipboardIcon, PlusIcon } from "../icons";
 import { ChangeDialog, ChangeList, TaskList, TaskRow } from "../lists";
+import { TaskCard } from "../taskCard";
 import { useChanges, useConnection, useMe, useToday, useUpdateTask } from "../queries";
 import { useNow } from "../shell";
 import { useTaskEditor } from "../tasks";
@@ -173,19 +174,27 @@ function showPlanRow(taskId: number) {
   window.setTimeout(() => row.classList.remove("flash"), 1600);
 }
 
-/** What an expanded "Due next week" task offers: starting it today, before the plan gets to it. */
-function StartEarly({ item }: { item: UpcomingItem }) {
+/** What an opened "Due next week" task offers about today's plan: start it early, or find it there. */
+function PlanChoice({ item }: { item: UpcomingItem }) {
   const start = useStartToday();
   const started = item.reasons.includes("started");
+  if (item.planned_minutes > 0) {
+    return (
+      <div className="start-early">
+        <p className="muted">In today's plan: {formatMinutes(item.planned_minutes)} today.</p>
+        <button type="button" className="button small secondary" onClick={() => showPlanRow(item.task.id)}>
+          Show it in today's plan
+        </button>
+      </div>
+    );
+  }
   if (item.reasons.length > 0 && !started) {
     return <p className="start-early muted">Today's plan lists this, but its study time is already given out.</p>;
   }
   return (
     <div className="start-early">
       <p className="muted">
-        {started
-          ? "You started this today, but today's study time is already given out."
-          : "Not on today's plan yet. You can start it now, before the plan gets to it."}
+        {started ? "You started this today, but today's study time is already given out." : "Not in today's plan yet · you can start early."}
       </p>
       {started ? (
         <button type="button" className="button small ghost" disabled={start.pending} onClick={() => start.set(item.task, false)}>
@@ -216,7 +225,6 @@ function DueSoonItem({
   const { task } = item;
   const due = task.due_at as string;
   const inPlan = item.planned_minutes > 0;
-  const open = expanded && !inPlan;
   const panelId = `due-soon-${task.id}`;
   const state = inPlan ? (
     <Badge tone="accent">In today's plan</Badge>
@@ -226,40 +234,33 @@ function DueSoonItem({
     <Badge>{task.progress}% done</Badge>
   ) : null;
   return (
-    <li className={`due-soon-item${open ? " expanded" : ""}`}>
-      <button
-        type="button"
-        className="due-soon-row"
-        onClick={inPlan ? () => showPlanRow(task.id) : onToggle}
-        aria-expanded={inPlan ? undefined : open}
-        aria-controls={open ? panelId : undefined}
-      >
+    <li className={`due-soon-item${expanded ? " expanded" : ""}`}>
+      <button type="button" className="due-soon-row" onClick={onToggle} aria-expanded={expanded} aria-controls={expanded ? panelId : undefined}>
         <span className={`due-soon-day${dayOffset(new Date(due), now, zone) <= 1 ? " soon" : ""}`}>{dueDayLabel(due, now, zone)}</span>
         <span className="due-soon-main">
-          <span className="course-chip">{task.course.code}</span>
+          <span className="course-chip" title={task.course.code}>
+            {task.course.code}
+          </span>
           <span className="due-soon-title">{task.title}</span>
         </span>
         <span className="due-soon-meta">
           <time dateTime={due}>{formatTime(new Date(due), zone)}</time>
           {state}
         </span>
-        <span className={`due-soon-chevron${inPlan ? " up" : ""}`} aria-hidden="true">
+        <span className="due-soon-chevron" aria-hidden="true">
           <ChevronRightIcon size={18} />
         </span>
-        {inPlan ? <span className="visually-hidden">Show it in today's plan</span> : null}
       </button>
-      {open ? (
+      {expanded ? (
         <div className="due-soon-panel" id={panelId}>
-          <ul className="task-list">
-            <TaskRow task={task} now={now} extra={<StartEarly item={item} />} />
-          </ul>
+          <TaskCard task={task} now={now} zone={zone} actions={<PlanChoice item={item} />} />
         </div>
       ) : null}
     </li>
   );
 }
 
-/** Everything due in the next 7 days as a compact list; a task opens into its Today row to start it early. */
+/** Everything due in the next 7 days as a compact list; a task opens in place to show its details. */
 function DueNextWeek({ plan, now }: { plan: Today; now: Date }) {
   const [open, setOpen] = useState<ReadonlySet<number>>(() => new Set());
   const items = plan.upcoming;

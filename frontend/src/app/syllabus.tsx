@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { apiHref } from "./api";
+import { ApiError, apiHref } from "./api";
 import { CanvasLink, PreviewUnavailable } from "./preview";
 import { timeAgo } from "./format";
 import { BookIcon, DownloadIcon, ExternalIcon } from "./icons";
@@ -108,36 +108,43 @@ function SourceCard({ source }: { source: SyllabusSource }) {
   );
 }
 
-/** The course syllabus, wherever the instructor put it: Syllabus tab, a page, a file or a module link. */
+/**
+ * The course syllabus, wherever the instructor put it: Syllabus tab, a page, a file or a module link.
+ * Read from Canvas when opened; the copy kept from the last read shows when Canvas can't be asked,
+ * which in a preview is always.
+ */
 export function CourseSyllabus({ courseId }: { courseId: number }) {
-  // The syllabus is read from Canvas when it is opened, and a preview has no Canvas token.
-  if (useIsPreview()) {
-    return (
-      <PreviewUnavailable>The syllabus is read from Canvas when you open it. In your own account it shows here.</PreviewUnavailable>
-    );
-  }
-  return <SyllabusFromCanvas courseId={courseId} />;
-}
-
-function SyllabusFromCanvas({ courseId }: { courseId: number }) {
+  const preview = useIsPreview();
   const syllabus = useSyllabus(courseId);
   const [picked, setPicked] = useState(0);
   if (syllabus.isPending) return <SkeletonList rows={4} label="Looking for the syllabus" />;
   if (syllabus.isError) {
+    if (preview || (syllabus.error instanceof ApiError && syllabus.error.code === "PREVIEW_ACCOUNT")) {
+      return <PreviewUnavailable>This course's syllabus hasn't been read from Canvas yet, so there is no copy to show.</PreviewUnavailable>;
+    }
     return <QueryError title="The syllabus didn't load" error={syllabus.error} retry={() => void syllabus.refetch()} />;
   }
-  const { sources } = syllabus.data;
+  const { sources, saved_copy: savedCopy, fetched_at: fetchedAt } = syllabus.data;
+  const copyNote = savedCopy ? (
+    <p className="muted syllabus-copy-note">
+      {preview ? "A copy read from Canvas" : "Canvas couldn't be reached, so this is the copy read"} {timeAgo(fetchedAt)}.
+    </p>
+  ) : null;
   if (sources.length === 0) {
     return (
-      <EmptyState icon={<BookIcon size={28} />} title="No syllabus found">
-        Checked the Canvas Syllabus tab, Pages, Modules and Files. If the instructor shares it another way, it will not show here.
-      </EmptyState>
+      <>
+        {copyNote}
+        <EmptyState icon={<BookIcon size={28} />} title="No syllabus found">
+          Checked the Canvas Syllabus tab, Pages, Modules and Files. If the instructor shares it another way, it will not show here.
+        </EmptyState>
+      </>
     );
   }
   const index = Math.min(picked, sources.length - 1);
   const current = sources[index] as SyllabusSource;
   return (
     <div className="syllabus">
+      {copyNote}
       {sources.length > 1 ? (
         <div className="syllabus-sources" role="group" aria-label="Syllabus sources">
           {sources.map((source, i) => (

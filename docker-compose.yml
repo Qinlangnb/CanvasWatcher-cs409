@@ -38,6 +38,10 @@ services:
       # Set in .env to offer "Preview" on the sign-in page: each visitor gets a separate copy of this
       # account's data with its identity taken out, deleted on sign-out or after 7 days. Empty: no preview.
       PREVIEW_SOURCE_USERNAME: ${PREVIEW_SOURCE_USERNAME:-}
+      # AI Chat: set AI_API_KEY in .env (never in this file). Empty: AI Chat is off.
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_BASE_URL: ${AI_BASE_URL:-https://api.deepseek.com/v1}
+      AI_MODEL: ${AI_MODEL:-deepseek-flash}
     expose:
       - "8000"
     depends_on:

@@ -4,7 +4,7 @@
 import { createContext, useContext, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { TASK_TYPE_LABELS, formatDue, formatMinutes, plural } from "./format";
 import { CanvasLink } from "./preview";
-import { TASK_TYPES, defaultMinutes, isSubmitted, parseEstimate, problemsOf, remainingOf, taskChanges, taskDraft, type TaskDraft, type TaskStatus } from "./forms";
+import { TASK_TYPES, defaultMinutes, isSubmitted, parseEstimate, parseSpent, problemsOf, remainingFrom, taskChanges, taskDraft, type TaskDraft, type TaskStatus } from "./forms";
 import { browserTimeZone, useCourses, useCreateTask, useDeleteTask, usePlanZone, useUpdateTask } from "./queries";
 import { useToast } from "./toast";
 import type { Task, TaskType } from "./types";
@@ -174,7 +174,8 @@ function TaskDialog({ task, open, onClose }: { task: Task; open: boolean; onClos
 
   const estimate = parseEstimate(draft.estimate);
   const total = estimate.minutes ?? defaultMinutes(draft.type);
-  const left = draft.status === "done" || submitted ? 0 : remainingOf(total, draft.progress);
+  const spent = parseSpent(draft.spent).minutes;
+  const left = draft.status === "done" || submitted ? 0 : remainingFrom(total, draft.progress, spent);
 
   const requestClose = () => {
     if (update.isPending || remove.isPending) return;
@@ -305,8 +306,21 @@ function TaskDialog({ task, open, onClose }: { task: Task; open: boolean; onClos
             )}, the usual time for ${(TASK_TYPE_LABELS[draft.type] ?? "this type").toLowerCase()}.`}
             error={fields.estimated_minutes}
           />
+          <Field
+            label="Time used so far, in minutes"
+            inputMode="numeric"
+            value={draft.spent}
+            onChange={(event) => set("spent", event.target.value)}
+            placeholder="0"
+            hint="With progress, your pace so far sets the time left."
+            error={fields.spent_minutes}
+          />
           <p className="muted" aria-live="polite">
-            {left === 0 ? "Nothing left to do." : `About ${formatMinutes(left)} left of ${formatMinutes(total)}.`}
+            {left === 0
+              ? "Nothing left to do."
+              : spent > 0 && draft.progress > 0
+                ? `About ${formatMinutes(left)} left at your pace so far.`
+                : `About ${formatMinutes(left)} left of ${formatMinutes(total)}.`}
           </p>
           <TextAreaField label="Notes" value={draft.notes} onChange={(event) => set("notes", event.target.value)} maxLength={2000} error={fields.notes} />
         </form>

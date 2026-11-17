@@ -7,7 +7,7 @@ import type { Prisma } from "../generated/prisma/client.js";
 import { FieldError, HttpError } from "../http/errors.js";
 import { idParam, parseQuery } from "../http/params.js";
 import { TASK_TYPES } from "../tasks/effort.js";
-import { openTaskWhere, presentTask, taskInclude } from "./present.js";
+import { openTaskWhere, presentTask, taskDescription, taskInclude } from "./present.js";
 import { getSettings } from "./settings.js";
 
 const instant = z.iso
@@ -53,6 +53,12 @@ const changes = z
       .min(0, "Use 0 to 100.")
       .max(100, "Use 0 to 100."),
     estimated_minutes: estimate.nullable(),
+    /** Total minutes spent so far, as the student counts it (not added to: it replaces). */
+    spent_minutes: z
+      .number({ error: "Send a whole number of minutes." })
+      .int("Send a whole number of minutes.")
+      .min(0, "Use 0 or more minutes.")
+      .max(1000 * 60, "Use at most 1,000 hours."),
     notes: notes.nullable(),
     /** Put the task on today's plan now, ahead of the planner (false takes it back off). */
     start_today: z.boolean({ error: "Send start_today as true or false." }),
@@ -101,8 +107,10 @@ export function tasksRouter(db: Db): Router {
     res.json(tasks.map((task) => presentTask(task, now)));
   });
 
+  /** One task, with the assignment's description from Canvas when there is one. */
   router.get("/:id", async (req, res) => {
-    res.json(presentTask(await findTask(currentAuth(res.locals).user.id, req.params.id)));
+    const task = await findTask(currentAuth(res.locals).user.id, req.params.id);
+    res.json({ ...presentTask(task), description: await taskDescription(db, task) });
   });
 
   /** Students add their own tasks (a study session, a reading) to one of their courses. */
@@ -145,6 +153,7 @@ export function tasksRouter(db: Db): Router {
       ...(body.ignored !== undefined && { ignoredAt: body.ignored ? (task.ignoredAt ?? now) : null }),
       ...(body.progress !== undefined && { progress: body.progress }),
       ...(body.estimated_minutes !== undefined && { estimatedMinutes: body.estimated_minutes }),
+      ...(body.spent_minutes !== undefined && { spentMinutes: body.spent_minutes }),
       ...(body.notes !== undefined && { notes: body.notes || null }),
       ...(startedOn !== undefined && { startedOn }),
       ...(body.title !== undefined && { title: body.title }),

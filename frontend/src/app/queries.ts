@@ -2,7 +2,10 @@ import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { isApiError, request } from "./api";
 import type {
+  AiStatus,
   CalendarEvent,
+  ChatMessage,
+  ChatReply,
   CalendarImport,
   CalendarSource,
   CanvasConnection,
@@ -20,6 +23,7 @@ import type {
   SyncRun,
   Task,
   TaskChanges,
+  TaskDetail,
   Today,
   User,
 } from "./types";
@@ -40,6 +44,8 @@ export const keys = {
   course: (id: number) => ["courses", id] as const,
   syllabus: (id: number) => ["courses", id, "syllabus"] as const,
   tasks: (params: TaskQuery) => ["tasks", params] as const,
+  task: (id: number) => ["tasks", "detail", id] as const,
+  ai: ["ai"] as const,
   today: ["today"] as const,
   settings: ["settings"] as const,
   events: (from: string, to: string) => ["events", { from, to }] as const,
@@ -323,6 +329,29 @@ export function useTasks(params: TaskQuery, enabled = true) {
       ),
     enabled,
     placeholderData: (previousData) => previousData,
+  });
+}
+
+/** One task with its Canvas description; only loaded when a task is opened. */
+export function useTaskDetail(id: number, enabled = true) {
+  return useQuery({
+    queryKey: keys.task(id),
+    queryFn: () => request<TaskDetail>(`/api/tasks/${id}`),
+    enabled: enabled && id > 0,
+    staleTime: 60_000,
+  });
+}
+
+/** Whether this server has AI Chat set up. */
+export function useAiStatus() {
+  return useQuery({ queryKey: keys.ai, queryFn: () => request<AiStatus>("/api/ai"), staleTime: 10 * 60_000 });
+}
+
+/** One AI Chat turn. The conversation lives in the browser and is sent whole each time. */
+export function useAiChat() {
+  return useMutation({
+    mutationFn: (body: { messages: ChatMessage[]; page: { path: string; course_id: number | null } }) =>
+      request<ChatReply>("/api/ai/chat", { method: "POST", body }),
   });
 }
 

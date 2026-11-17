@@ -202,13 +202,20 @@ test("touch targets for buttons and inputs are at least 44px", () => {
 
 // --- Today: due next week, and sync results ---
 
-test("due next week is a compact list under today's plan whose rows open into the plan's task row", () => {
+test("due next week is a compact list under today's plan whose rows open into the task's details", () => {
   const today = read("app/pages/today.tsx");
+  const card = read("app/taskCard.tsx");
   assert.match(today, /<PlanSection plan=\{plan\} now=\{now\} \/> : null\}\s*\{plan \? <DueNextWeek plan=\{plan\} now=\{now\} \/> : null\}/);
-  // One button per line; a planned task jumps to its row in the plan instead of opening a second copy.
-  assert.match(today, /className="due-soon-row"\s+onClick=\{inPlan \? \(\) => showPlanRow\(task\.id\) : onToggle\}/);
-  assert.match(today, /aria-expanded=\{inPlan \? undefined : open\}/);
-  assert.match(today, /<TaskRow task=\{task\} now=\{now\} extra=\{<StartEarly item=\{item\} \/>\} \/>/);
+  // One button per line; every task opens in place, a planned one with a way to its row in the plan.
+  assert.match(today, /className="due-soon-row" onClick=\{onToggle\} aria-expanded=\{expanded\}/);
+  assert.match(today, /<TaskCard task=\{task\} now=\{now\} zone=\{zone\} actions=\{<PlanChoice item=\{item\} \/>\} \/>/);
+  assert.match(today, /onClick=\{\(\) => showPlanRow\(item\.task\.id\)\}/);
+  // The card shows time left and its basis, takes the time used, and saves progress when the slider is let go.
+  assert.match(card, /<dt>Time left<\/dt>/);
+  assert.match(card, /changes: \{ spent_minutes: parsed\.minutes \}/);
+  assert.match(card, /aria-label="Save time used"/);
+  assert.match(card, /onPointerUp=\{commit\}/);
+  assert.match(card, /Assignment description/);
   assert.match(today, /changes: \{ start_today: start \}/);
   assert.match(today, /prefers-reduced-motion: reduce/);
 });
@@ -243,4 +250,15 @@ test("sync shows its result: a toast, the button, the status line and a dot on t
   let warnDot = false;
   css.walkRules(".status-dot.warn", () => (warnDot = true));
   assert.ok(warnDot, "partial syncs have their own dot colour");
+});
+
+test("AI Chat shows only when the server has it, renders Markdown without HTML or images, and sends Enter", () => {
+  const chat = read("app/aiChat.tsx");
+  const shell = read("app/shell.tsx");
+  assert.match(shell, /<AiChat \/>/);
+  assert.match(chat, /if \(!status\.data\?\.enabled\) return null;/);
+  assert.match(chat, /skipHtml disallowedElements=\{\["img"\]\}/);
+  assert.match(chat, /event\.key === "Enter" && !event\.shiftKey && !event\.nativeEvent\.isComposing/);
+  assert.match(chat, /messages: conversation\.slice\(-SENT_MESSAGES\)/);
+  assert.match(chat, /sessionStorage/);
 });

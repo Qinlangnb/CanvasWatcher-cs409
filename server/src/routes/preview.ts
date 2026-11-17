@@ -9,6 +9,11 @@ import { PREVIEW_LIFETIME_MS, createPreviewAccount, findTemplate, isPreview, res
 import { publicUser } from "./users.js";
 
 const HOUR = 60 * 60_000;
+const MINUTE = 60_000;
+/** Per network (IP). Generous on purpose: one preview a second never hits it; there is no cap on open previews. */
+export const PREVIEW_STARTS_PER_MINUTE = 120;
+/** Per preview account. */
+export const PREVIEW_RESETS_PER_MINUTE = 60;
 const disabled = () => new HttpError(404, "PREVIEW_DISABLED", "This server does not offer a preview.");
 
 export function previewRouter(db: Db, config: Config): Router {
@@ -27,8 +32,8 @@ export function previewRouter(db: Db, config: Config): Router {
     if (res.locals.auth) throw new HttpError(409, "ALREADY_SIGNED_IN", "Sign out before starting a preview.");
     await enforce(
       db,
-      [{ key: `preview:${req.ip}`, limit: 10, windowMs: HOUR }],
-      "Too many previews were started from this network. Try again in an hour.",
+      [{ key: `preview:${req.ip}`, limit: PREVIEW_STARTS_PER_MINUTE, windowMs: MINUTE }],
+      "Too many previews were started from this network. Try again in a minute.",
     );
     const user = await createPreviewAccount(db, template);
     setSessionCookies(res, config, await createSession(db, user.id));
@@ -43,8 +48,8 @@ export function previewRouter(db: Db, config: Config): Router {
     if (!template) throw disabled();
     await enforce(
       db,
-      [{ key: `preview-reset:${user.id}`, limit: 30, windowMs: HOUR }],
-      "This preview was reset many times this hour. Try again later.",
+      [{ key: `preview-reset:${user.id}`, limit: PREVIEW_RESETS_PER_MINUTE, windowMs: MINUTE }],
+      "This preview was reset many times this minute. Try again shortly.",
     );
     await resetPreview(db, user.id, template);
     res.status(204).end();

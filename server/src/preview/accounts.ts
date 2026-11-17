@@ -212,6 +212,23 @@ async function copyAccount(tx: Prisma.TransactionClient, template: User, userId:
     })),
   });
 
+  // Kept syllabi point at files by this app's id, so their download links are moved to the copies.
+  const copiedFiles = await tx.courseFile.findMany({ where: { userId }, select: { id: true, courseId: true, canvasId: true } });
+  const fileByKey = new Map(copiedFiles.map((file) => [`${file.courseId}|${file.canvasId}`, file.id]));
+  const fileIds = new Map(files.map((file) => [file.id, fileByKey.get(`${course(file.courseId)}|${file.canvasId}`)]));
+  const syllabi = await tx.courseSyllabus.findMany({ where: { userId: from } });
+  for (const { courseId, userId: _owner, content, ...syllabus } of syllabi) {
+    const copy = scrub.json(content) as { sources?: { download_url?: string | null }[] };
+    for (const source of copy.sources ?? []) {
+      const match = /^\/api\/files\/(\d+)\/download$/.exec(source.download_url ?? "");
+      if (match) {
+        const moved = fileIds.get(Number(match[1]));
+        source.download_url = moved === undefined ? null : `/api/files/${moved}/download`;
+      }
+    }
+    await tx.courseSyllabus.create({ data: { ...syllabus, courseId: course(courseId), userId, content: copy as Prisma.InputJsonValue } });
+  }
+
   // Source items are found again by their unique (course, kind, Canvas id), so changes can point at the copies.
   const items = await tx.sourceItem.findMany({ where: { userId: from }, orderBy: { id: "asc" } });
   const copies = await tx.sourceItem.createManyAndReturn({

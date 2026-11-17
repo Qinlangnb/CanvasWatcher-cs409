@@ -34,7 +34,7 @@ CanvasWatcher collects course materials, deadlines, tasks, and meaningful change
 | `POST /api/sessions` | Sign in with username or email | 201 |
 | `DELETE /api/sessions/current` | Sign out this browser (signing out of a preview deletes it) | 204 |
 | `GET /api/preview` | Whether this server offers a preview | 200 |
-| `POST /api/preview` | Signed out only: create a preview account with a scrubbed copy of the preview data and sign in (10 per network per hour) | 201 |
+| `POST /api/preview` | Signed out only: create a preview account with a scrubbed copy of the preview data and sign in (120 per network per minute; open previews are not capped) | 201 |
 | `POST /api/preview/reset` | Preview accounts only: copy the preview data again | 204 |
 | `GET /api/canvas/connection` | Canvas site, account, status and last sync | 200 |
 | `PUT /api/canvas/connection` | Check a Canvas access token, store it encrypted, start the first sync | 200 |
@@ -43,9 +43,10 @@ CanvasWatcher collects course materials, deadlines, tasks, and meaningful change
 | `GET /api/sync/runs/latest`, `GET /api/sync/runs/{id}` | Sync progress and result | 200 |
 | `GET /api/courses[?archived=true]` | Active (or only archived) courses with counts | 200 |
 | `GET /api/courses/{id}`, `PATCH /api/courses/{id}` | One course; archive or restore it | 200 |
+| `GET /api/courses/{id}/syllabus` | The syllabus wherever the instructor put it, read from Canvas; the copy kept from the last read (`saved_copy: true`) when Canvas can't be asked | 200 |
 | `GET /api/tasks[?course_id=&status=all&due_after=&due_before=]` | Open tasks (or all) by due date, undated last | 200 |
 | `POST /api/tasks` | Add a personal task to one of your courses | 201 |
-| `GET /api/tasks/{id}`, `PATCH /api/tasks/{id}` | One task; set `done`, `ignored`, `progress`, `estimated_minutes`, `notes`, `start_today` (and `title`, `type`, `due_at` on personal tasks) | 200 |
+| `GET /api/tasks/{id}`, `PATCH /api/tasks/{id}` | One task with its Canvas `description`; set `done`, `ignored`, `progress`, `estimated_minutes`, `spent_minutes`, `notes`, `start_today` (and `title`, `type`, `due_at` on personal tasks) | 200 |
 | `DELETE /api/tasks/{id}` | Delete a personal task (Canvas tasks can only be ignored) | 204 |
 | `GET /api/today` | Today's plan: free time in the study window after busy events, planned tasks with reasons, open work due in the next 7 days, today's events, what was done today | 200 |
 | `GET /api/calendar/events?from=&to=` | Events overlapping a range (imported and your own) | 200 |
@@ -57,6 +58,8 @@ CanvasWatcher collects course materials, deadlines, tasks, and meaningful change
 | `GET /api/changes[?course_id=&unread=&limit=&before=]` | Change feed, newest first, cursor paging | 200 |
 | `GET /api/changes/unread-count`, `POST /api/changes/mark-all-read` | Unread badge; mark all (or one course) read | 200 |
 | `GET /api/changes/{id}`, `PATCH /api/changes/{id}` | One change with before/after values; set `read` | 200 |
+| `GET /api/ai` | Whether AI Chat is set up, and its model | 200 |
+| `POST /api/ai/chat` | One AI Chat turn: `{ messages, page }` in, `{ message, tools_used }` out (30 per account and 120 per network per 10 minutes) | 200 |
 
 **Preview accounts** let people without an account or Canvas token look around with real course data (for example heuristic evaluators). They are off unless `PREVIEW_SOURCE_USERNAME` names an existing account on the server, the *template*.
 
@@ -64,8 +67,13 @@ CanvasWatcher collects course materials, deadlines, tasks, and meaningful change
 - The copy has the template's identity taken out: their email, username, Canvas name (and each word of it) and Canvas user id are replaced in every copied text and before/after value. Other personal details typed into tasks or events are copied as they are.
 - Everything else works on the copy as in any account, and edits never reach the template. **Reset** copies the template again.
 - The account is deleted when its user ends the preview, or after 7 days.
-- A preview has no Canvas token and never contacts Canvas. Connecting or disconnecting Canvas, syncing, downloads, the syllabus and password changes return 403 `PREVIEW_ACCOUNT` ("Preview account not available."); the interface greys those out. The scheduler skips preview accounts.
+- A preview has no Canvas token and never contacts Canvas. Connecting or disconnecting Canvas, syncing, downloads and password changes return 403 `PREVIEW_ACCOUNT` ("Preview account not available."); the interface greys those out. The syllabus shows the copy kept from the template (403 when there is none). The scheduler skips preview accounts.
+- AI Chat works in a preview with the server's key, on the preview's copy of the data.
 - The data is as fresh as the template's last sync.
+
+**Tasks** keep the student's progress, own estimate and time used (`spent_minutes`). Time left (`remaining_minutes`) comes from the pace so far once time used and progress are both given (`remaining_basis: "pace"`: 90 minutes for 30% leaves about 210), otherwise from the estimate or the usual time for the task type. Canvas scores (`score`, `grade`, `excused`) are stored at each sync; null means not graded yet or hidden from the student.
+
+**AI Chat** answers questions about the signed-in student's courses with an OpenAI-compatible chat completions API (`AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL`; DeepSeek `deepseek-flash` by default; an empty key turns it off). The model reads through read-only tools: courses, tasks with scores and time left, one task with its Canvas description, the syllabus (kept copies, refreshed by the sync about once a day), calendar events, recent changes and file names. It cannot change anything. The conversation stays in the browser tab and is sent with each message; the server stores nothing. One turn has at most 8 lookup rounds and returns within about 90 seconds.
 
 Only `canvas.illinois.edu` and `*.instructure.com` can be connected by default (`CANVAS_ALLOWED_HOSTS`). Each account syncs every `SYNC_INTERVAL_MINUTES` (default 30) while connected; a token Canvas rejects stops automatic syncs until the user reconnects.
 
@@ -99,7 +107,7 @@ npm run dev                      # API on http://localhost:8000, restarts on sav
 
 In another terminal, `cd frontend && npm install && npm run dev` serves the UI on `http://localhost:5173` and proxies `/api` to `localhost:8000` (override with `VITE_API_PROXY`).
 
-`server/.env.example` turns previews off. Set `PREVIEW_SOURCE_USERNAME` in `server/.env` (or in the root `.env` for the Docker stack) to a connected account's username to get **Preview** on the sign-in page.
+`server/.env.example` turns previews off. Set `PREVIEW_SOURCE_USERNAME` in `server/.env` (or in the root `.env` for the Docker stack) to a connected account's username to get **Preview** on the sign-in page. Set `AI_API_KEY` there (never in a committed file) to turn on AI Chat.
 
 | Command (in `server/`) | Does |
 | --- | --- |
@@ -115,8 +123,8 @@ CI (`.github/workflows/ci.yml`) runs the server checks against a PostgreSQL serv
 
 | Path | Purpose |
 | --- | --- |
-| `server/` | Node.js REST API: Express routes, Prisma schema and migrations, preview accounts (`src/preview/`), tests, query benchmark (`bench/`) |
-| `frontend/src/app/` | The React interface: `router.tsx` (routes and guards), `pages/`, shared `ui.tsx`, `queries.ts` (React Query hooks), `tasks.tsx` and `events.tsx` (editors), `preview.tsx` (Preview sign-in, banner, dialogs and greyed-out controls), `forms.ts` and `zoned.ts` (pure form and time-zone helpers, unit-tested), `app.css` (design tokens, light and dark) |
+| `server/` | Node.js REST API: Express routes, Prisma schema and migrations, preview accounts (`src/preview/`), AI Chat (`src/ai/`), tests, query benchmark (`bench/`) |
+| `frontend/src/app/` | The React interface: `router.tsx` (routes and guards), `pages/`, shared `ui.tsx`, `queries.ts` (React Query hooks), `tasks.tsx` and `events.tsx` (editors), `preview.tsx` (Preview sign-in, banner, dialogs and greyed-out controls), `aiChat.tsx` (the AI Chat drawer), `taskCard.tsx` (a task opened in place), `forms.ts` and `zoned.ts` (pure form and time-zone helpers, unit-tested), `app.css` (design tokens, light and dark) |
 | `docs/cs409/` | Rewrite plan, performance measurements, heuristic evaluation kit |
 | `legacy/` | The original Python backend, gateway and deployment files, kept as a porting reference |
 

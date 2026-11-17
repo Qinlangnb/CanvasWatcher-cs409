@@ -32,6 +32,25 @@ export function remainingOf(total: number, progress: number): number {
   return Math.max(5, Math.round((total * (100 - progress)) / 100 / 5) * 5);
 }
 
+/**
+ * Work left, like the server: with time used and progress both given, the pace so far decides it
+ * (90 minutes for 30% leaves about 210); otherwise the total less the progress.
+ */
+export function remainingFrom(total: number, progress: number, spent: number): number {
+  if (progress >= 100) return 0;
+  if (spent > 0 && progress > 0) return Math.max(5, Math.round((spent * (100 - progress)) / progress / 5) * 5);
+  return remainingOf(total, progress);
+}
+
+/** Minutes used so far from a form field: empty means 0. */
+export function parseSpent(value: string): { minutes: number; error?: string } {
+  const text = value.trim();
+  if (!text) return { minutes: 0 };
+  const minutes = Number(text);
+  if (!Number.isInteger(minutes) || minutes < 0 || minutes > 60_000) return { minutes: 0, error: "Enter whole minutes, 0 or more." };
+  return { minutes };
+}
+
 /** Whole minutes from a form field: null when empty, an error when out of the server's range. */
 export function parseEstimate(value: string): { minutes: number | null; error?: string } {
   const text = value.trim();
@@ -52,6 +71,8 @@ export interface TaskDraft {
   status: TaskStatus;
   progress: number;
   estimate: string;
+  /** Minutes used so far. */
+  spent: string;
   notes: string;
 }
 
@@ -63,6 +84,7 @@ export function taskDraft(task: Task, zone: string): TaskDraft {
     status: task.completed_at ? "done" : task.ignored_at ? "ignored" : "open",
     progress: task.progress,
     estimate: task.estimated_minutes?.toString() ?? "",
+    spent: task.spent_minutes > 0 ? String(task.spent_minutes) : "",
     notes: task.notes ?? "",
   };
 }
@@ -80,6 +102,11 @@ export function taskChanges(task: Task, initial: TaskDraft, draft: TaskDraft, zo
     const estimate = parseEstimate(draft.estimate);
     if (estimate.error) errors.estimated_minutes = estimate.error;
     else changes.estimated_minutes = estimate.minutes;
+  }
+  if (draft.spent.trim() !== initial.spent) {
+    const spent = parseSpent(draft.spent);
+    if (spent.error) errors.spent_minutes = spent.error;
+    else changes.spent_minutes = spent.minutes;
   }
   if (draft.notes.trim() !== initial.notes.trim()) changes.notes = draft.notes.trim() || null;
   if (task.source === "personal") {

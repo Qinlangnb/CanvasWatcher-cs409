@@ -3,6 +3,7 @@ import request from "supertest";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { PREVIEW_LIFETIME_MS, deleteExpiredPreviews, identityScrubber } from "../src/preview/accounts.js";
+import { PREVIEW_STARTS_PER_MINUTE } from "../src/routes/preview.js";
 import { CANVAS_ORIGIN, fakeCanvas, seedCourse } from "./fakeCanvas.js";
 import { Browser, ORIGIN, PASSWORD, config, connectCanvas, db, resetDatabase, services, signUp, syncNow } from "./helpers.js";
 
@@ -170,6 +171,10 @@ describe("preview accounts", () => {
     const [file] = (await browser.send("get", "/api/files")).body.items;
     await unavailable(await browser.send("get", file.download_url));
     const [course] = (await browser.send("get", "/api/courses")).body;
+    // The syllabus is the copy kept from the template; without one there is nothing to show.
+    const syllabus = await browser.send("get", `/api/courses/${course.id}/syllabus`);
+    expect(syllabus.body).toMatchObject({ saved_copy: true });
+    await db.courseSyllabus.deleteMany({ where: { courseId: course.id } });
     await unavailable(await browser.send("get", `/api/courses/${course.id}/syllabus`));
     await unavailable(
       await browser.send("put", "/api/users/me/password", { body: { current_password: PASSWORD, new_password: "another-password-1" } }),
@@ -240,12 +245,36 @@ describe("preview accounts", () => {
     expect((await ada.send("get", "/api/users/me")).status).toBe(200);
   });
 
-  it("limits how many previews one network starts", async () => {
+  it("lets one network start a preview every second, with a per-minute ceiling", async () => {
     await signUp();
-    for (let index = 0; index < 10; index += 1) await startPreview();
+    const before = new Set((await db.loginAttempt.findMany()).map((row) => row.keyHash));
+    for (let index = 0; index < 5; index += 1) await startPreview();
+    const [counter] = (await db.loginAttempt.findMany()).filter((row) => !before.has(row.keyHash));
+    expect(counter?.count).toBe(5);
+    expect(PREVIEW_STARTS_PER_MINUTE).toBeGreaterThanOrEqual(60);
+
+    await db.loginAttempt.update({ where: { keyHash: counter!.keyHash }, data: { count: PREVIEW_STARTS_PER_MINUTE } });
     const res = await new Browser().send("post", "/api/preview");
     expect(res.status).toBe(429);
     expect(res.body.code).toBe("TOO_MANY_ATTEMPTS");
+
+    // The window is a minute: once it has passed, previews start again.
+    await db.loginAttempt.update({ where: { keyHash: counter!.keyHash }, data: { windowStart: new Date(Date.now() - 61_000) } });
+    await startPreview();
+  });
+
+  it("copies used time, scores and the kept syllabus, with file links moved to the copies", async () => {
+    await seedTemplate();
+    const template = await db.user.findFirstOrThrow({ where: { usernameKey: "ada" } });
+    await db.task.updateMany({ where: { userId: template.id, source: "CANVAS" }, data: { spentMinutes: 45, progress: 30, score: 88, grade: "88" } });
+    const browser = await startPreview();
+    const [task] = (await browser.send("get", "/api/tasks?status=all")).body.filter((row: { source: string }) => row.source === "canvas");
+    expect(task).toMatchObject({ spent_minutes: 45, progress: 30, score: 88, grade: "88", remaining_basis: "pace", remaining_minutes: 105 });
+    const [course] = (await browser.send("get", "/api/courses")).body;
+    const syllabus = (await browser.send("get", `/api/courses/${course.id}/syllabus`)).body;
+    const [file] = (await browser.send("get", "/api/files")).body.items;
+    const pdf = syllabus.sources.find((source: { kind: string }) => source.kind === "file");
+    expect(pdf.download_url).toBe(file.download_url);
   });
 
   it("is off when PREVIEW_SOURCE_USERNAME is empty", async () => {

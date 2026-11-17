@@ -74,6 +74,14 @@ export interface Task {
   estimated_minutes: number | null;
   total_minutes: number;
   remaining_minutes: number;
+  /** What remaining_minutes comes from: the pace so far, the student's estimate, or the type's default. */
+  remaining_basis: "pace" | "estimate" | "default";
+  /** Minutes the student has spent on it, as they report it. */
+  spent_minutes: number;
+  /** Canvas score and grade once Canvas shows them; null until graded or while hidden. */
+  score: number | null;
+  grade: string | null;
+  excused: boolean;
   /** Local date (YYYY-MM-DD) the student started it ahead of the plan; that day's plan includes it. */
   started_on: string | null;
   notes: string | null;
@@ -84,6 +92,7 @@ export interface TaskChanges {
   ignored?: boolean;
   progress?: number;
   estimated_minutes?: number | null;
+  spent_minutes?: number;
   notes?: string | null;
   /** Put the task on today's plan now (false takes it back off). */
   start_today?: boolean;
@@ -137,6 +146,30 @@ export interface SyllabusSource {
 export interface Syllabus {
   found: boolean;
   sources: SyllabusSource[];
+  /** When it was read from Canvas. */
+  fetched_at: string;
+  /** True when Canvas couldn't be asked and this is the copy kept from an earlier read. */
+  saved_copy: boolean;
+}
+
+/** One task with the assignment's description from Canvas. */
+export interface TaskDetail extends Task {
+  description: string | null;
+}
+
+export interface AiStatus {
+  enabled: boolean;
+  model: string | null;
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ChatReply {
+  message: string;
+  tools_used: string[];
 }
 
 export type ChangeKind = "assignment" | "file" | "announcement";

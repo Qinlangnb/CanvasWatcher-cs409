@@ -9,7 +9,8 @@ import type {
   SyncRun,
   Task,
 } from "../generated/prisma/client.js";
-import { remainingMinutes, totalMinutes } from "../tasks/effort.js";
+import type { Db } from "../db.js";
+import { remainingBasis, remainingMinutes, totalMinutes } from "../tasks/effort.js";
 
 const iso = (date: Date | null) => (date ? date.toISOString() : null);
 const lower = <T extends string>(value: T) => value.toLowerCase() as Lowercase<T>;
@@ -111,10 +112,29 @@ export function presentTask(task: TaskWithCourse, now = new Date()) {
     estimated_minutes: task.estimatedMinutes,
     total_minutes: totalMinutes(task),
     remaining_minutes: state === "done" ? 0 : remainingMinutes(task),
+    /** What remaining_minutes is based on: the pace so far, the student's estimate, or the type's default. */
+    remaining_basis: remainingBasis(task),
+    /** Minutes the student has spent on it, as they report it. */
+    spent_minutes: task.spentMinutes,
+    /** Canvas score and grade, once Canvas shows them to the student. */
+    score: task.score,
+    grade: task.grade,
+    excused: task.excused,
     /** Local date the student started it ahead of the plan; that day's plan includes it. */
     started_on: task.startedOn,
     notes: task.notes,
   };
+}
+
+/** The Canvas assignment's description, as text, when Canvas has one (never for personal tasks). */
+export async function taskDescription(db: Db, task: Pick<Task, "courseId" | "canvasId">): Promise<string | null> {
+  if (!task.canvasId) return null;
+  const item = await db.sourceItem.findUnique({
+    where: { courseId_kind_canvasId: { courseId: task.courseId, kind: "ASSIGNMENT", canvasId: task.canvasId } },
+    select: { content: true },
+  });
+  const description = (item?.content as { description?: unknown } | undefined)?.description;
+  return typeof description === "string" && description.trim() ? description : null;
 }
 
 export function presentFile(file: CourseFile & { course: CourseSummary }) {

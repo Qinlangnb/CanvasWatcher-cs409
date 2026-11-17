@@ -140,6 +140,17 @@ test("estimates default like the server and shrink with progress", () => {
   for (const bad of ["4", "6001", "1.5", "an hour"]) assert.ok(forms.parseEstimate(bad).error, bad);
 });
 
+test("time used and progress give the pace, like the server", () => {
+  // 90 minutes for 30% means about 210 more for the other 70%.
+  assert.equal(forms.remainingFrom(120, 30, 90), 210);
+  assert.equal(forms.remainingFrom(120, 30, 0), 85);
+  assert.equal(forms.remainingFrom(120, 0, 90), 120);
+  assert.equal(forms.remainingFrom(120, 100, 90), 0);
+  assert.deepEqual(forms.parseSpent(""), { minutes: 0 });
+  assert.deepEqual(forms.parseSpent("75"), { minutes: 75 });
+  for (const bad of ["-5", "1.5", "an hour"]) assert.ok(forms.parseSpent(bad).error, bad);
+});
+
 test("work handed in on Canvas is locked as done", () => {
   assert.equal(forms.isSubmitted(task({ submission_state: "graded" })), true);
   assert.equal(forms.isSubmitted(task({ submission_state: "unsubmitted" })), false);
@@ -156,6 +167,7 @@ test("a task save sends only what changed, and never Canvas-owned fields", () =>
     status: "open",
     progress: 0,
     estimate: "",
+    spent: "",
     notes: "Read ch. 3",
   });
   assert.deepEqual(forms.taskChanges(canvas, initial, initial, CHICAGO), { changes: {}, errors: {} });
@@ -167,6 +179,10 @@ test("a task save sends only what changed, and never Canvas-owned fields", () =>
   });
   assert.deepEqual(forms.taskChanges(canvas, initial, { ...initial, estimate: "2" }, CHICAGO).errors, {
     estimated_minutes: "Enter whole minutes from 5 to 6000, or leave it empty for the default.",
+  });
+  assert.deepEqual(forms.taskChanges(canvas, initial, { ...initial, spent: " 45 " }, CHICAGO).changes, { spent_minutes: 45 });
+  assert.deepEqual(forms.taskChanges(canvas, initial, { ...initial, spent: "-1" }, CHICAGO).errors, {
+    spent_minutes: "Enter whole minutes, 0 or more.",
   });
 
   const personal = task({ source: "personal", due_at: "2026-11-07T20:00:00Z", completed_at: "2026-11-06T10:00:00Z" });

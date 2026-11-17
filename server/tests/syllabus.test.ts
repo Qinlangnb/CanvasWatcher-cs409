@@ -146,14 +146,37 @@ describe("GET /api/courses/:id/syllabus", () => {
     await connectCanvas(ada);
     const res = await syllabusFor(ada);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ found: false, sources: [] });
+    expect(res.body).toMatchObject({ found: false, sources: [], saved_copy: false });
   });
 
-  it("asks to reconnect when Canvas rejects the token, and hides other users' courses", async () => {
+  it("is kept by the sync and answered from the copy when Canvas can't be asked", async () => {
+    seedCourse(fakeCanvas);
+    fakeCanvas.syllabusBodies.set("101", `<h2>Course grade</h2><p>Final grades: A 90, B 80, C 70, D 60.</p>${EXAMS}`);
+    const ada = await signUp();
+    await connectCanvas(ada);
+    const [course] = (await ada.send("get", "/api/courses")).body;
+    // The first sync already looked the syllabus up and kept it.
+    expect(await db.courseSyllabus.count({ where: { courseId: course.id } })).toBe(1);
+
+    const live = await ada.send("get", `/api/courses/${course.id}/syllabus`);
+    expect(live.body).toMatchObject({ found: true, saved_copy: false, fetched_at: expect.any(String) });
+
+    fakeCanvas.failures.set("/api/v1/courses/101", 503);
+    fakeCanvas.failures.set("/api/v1/courses/101/pages", 503);
+    fakeCanvas.failures.set("/api/v1/courses/101/modules", 503);
+    fakeCanvas.token = "rotated";
+    const kept = await ada.send("get", `/api/courses/${course.id}/syllabus`);
+    expect(kept.status).toBe(200);
+    expect(kept.body).toMatchObject({ found: true, saved_copy: true });
+    expect(kept.body.sources.map((source: { blocks: Parameters<typeof blocksText>[0] }) => blocksText(source.blocks)).join(" ")).toContain("Exam: Final | Date: Dec 15");
+  });
+
+  it("asks to reconnect when Canvas rejects the token and nothing is kept, and hides other users' courses", async () => {
     seedCourse(fakeCanvas);
     const ada = await signUp();
     await connectCanvas(ada);
     const [course] = (await ada.send("get", "/api/courses")).body;
+    await db.courseSyllabus.deleteMany();
     fakeCanvas.token = "rotated";
     const res = await ada.send("get", `/api/courses/${course.id}/syllabus`);
     expect(res.status).toBe(409);

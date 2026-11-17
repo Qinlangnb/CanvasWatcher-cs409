@@ -14,30 +14,31 @@ datasource db {
 }
 
 model User {
-  id            String            @id @default(uuid()) @db.Uuid
+  id               String            @id @default(uuid()) @db.Uuid
   /// Display form, as the user typed it.
-  username      String
+  username         String
   /// Lower-cased username; makes sign-in and uniqueness case-insensitive.
-  usernameKey   String            @unique @map("username_key")
+  usernameKey      String            @unique @map("username_key")
   /// Stored lower-cased.
-  email         String            @unique
-  passwordHash  String            @map("password_hash")
+  email            String            @unique
+  passwordHash     String            @map("password_hash")
   /// Set on preview accounts, which are deleted at this time. Previews have no usable password.
   /// The column keeps its first name, from when previews were sample-data demos.
-  previewExpiresAt DateTime?      @map("demo_expires_at") @db.Timestamptz(3)
-  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
-  sessions      Session[]
-  canvas        CanvasConnection?
-  syncRuns      SyncRun[]
-  courses       Course[]
-  tasks         Task[]
-  files         CourseFile[]
-  sourceItems   SourceItem[]
-  changes       ChangeEvent[]
-  settings      UserSettings?
-  calendars     CalendarSource[]
-  events        CalendarEvent[]
+  previewExpiresAt DateTime?         @map("demo_expires_at") @db.Timestamptz(3)
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  sessions         Session[]
+  canvas           CanvasConnection?
+  syncRuns         SyncRun[]
+  courses          Course[]
+  tasks            Task[]
+  files            CourseFile[]
+  sourceItems      SourceItem[]
+  changes          ChangeEvent[]
+  settings         UserSettings?
+  calendars        CalendarSource[]
+  events           CalendarEvent[]
+  syllabi          CourseSyllabus[]
 
   @@index([previewExpiresAt])
   @@map("users")
@@ -135,26 +136,27 @@ model SyncRun {
 }
 
 model Course {
-  id          Int           @id @default(autoincrement())
-  userId      String        @map("user_id") @db.Uuid
-  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  canvasId    String        @map("canvas_id")
-  courseCode  String        @map("course_code")
+  id          Int             @id @default(autoincrement())
+  userId      String          @map("user_id") @db.Uuid
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  canvasId    String          @map("canvas_id")
+  courseCode  String          @map("course_code")
   name        String
-  termName    String?       @map("term_name")
-  termStartAt DateTime?     @map("term_start_at") @db.Timestamptz(3)
-  termEndAt   DateTime?     @map("term_end_at") @db.Timestamptz(3)
-  htmlUrl     String        @map("html_url")
+  termName    String?         @map("term_name")
+  termStartAt DateTime?       @map("term_start_at") @db.Timestamptz(3)
+  termEndAt   DateTime?       @map("term_end_at") @db.Timestamptz(3)
+  htmlUrl     String          @map("html_url")
   /// Set when the user hides the course; sync keeps updating it.
-  archivedAt  DateTime?     @map("archived_at") @db.Timestamptz(3)
+  archivedAt  DateTime?       @map("archived_at") @db.Timestamptz(3)
   /// The last sync that saw this course among the user's active enrollments.
-  lastSeenAt  DateTime      @map("last_seen_at") @db.Timestamptz(3)
-  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  lastSeenAt  DateTime        @map("last_seen_at") @db.Timestamptz(3)
+  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
   tasks       Task[]
   files       CourseFile[]
   sourceItems SourceItem[]
   changes     ChangeEvent[]
+  syllabus    CourseSyllabus?
 
   @@unique([userId, canvasId])
   @@index([userId, archivedAt])
@@ -197,6 +199,13 @@ model Task {
   progress         Int        @default(0)
   /// The student's estimate of the total work; null means "use the default for the task type".
   estimatedMinutes Int?       @map("estimated_minutes")
+  /// Minutes the student says they have spent on it so far. With progress, it gives a better
+  /// estimate of what is left than the type's default.
+  spentMinutes     Int        @default(0) @map("spent_minutes")
+  /// The student's Canvas score and grade once Canvas shows them; null until graded or while hidden.
+  score            Float?
+  grade            String?
+  excused          Boolean    @default(false)
   /// Local date (YYYY-MM-DD) the student started this task before the plan reached it. That day's plan
   /// includes it; on later days the planner decides on its own again.
   startedOn        String?    @map("started_on") @db.VarChar(10)
@@ -345,4 +354,19 @@ model CalendarEvent {
   @@index([userId, startAt])
   @@index([sourceId])
   @@map("calendar_events")
+}
+
+/// The last syllabus found for a course (see canvas/syllabus.ts), kept so it can be shown and
+/// given to AI Chat when Canvas can't be asked: previews, a rejected token, Canvas being down.
+model CourseSyllabus {
+  courseId  Int      @id @map("course_id")
+  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// The Syllabus as the API returns it: { found, sources }.
+  content   Json
+  fetchedAt DateTime @map("fetched_at") @db.Timestamptz(3)
+
+  @@index([userId])
+  @@map("course_syllabi")
 }

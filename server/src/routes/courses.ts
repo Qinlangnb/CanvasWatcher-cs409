@@ -3,6 +3,7 @@ import { z } from "zod";
 import { currentAuth } from "../auth/middleware.js";
 import { CanvasError, openToken } from "../canvas/client.js";
 import { findSyllabus } from "../canvas/syllabus.js";
+import { keepSyllabus, keptSyllabus } from "../canvas/syllabusStore.js";
 import type { Db } from "../db.js";
 import type { Course } from "../generated/prisma/client.js";
 import { HttpError } from "../http/errors.js";
@@ -67,30 +68,47 @@ export function coursesRouter(db: Db, services: Services): Router {
 
   /**
    * The course syllabus, found wherever the instructor put it (see canvas/syllabus.ts). It is read
-   * from Canvas on request with the user's token and not stored.
+   * from Canvas with the user's token and a copy is kept. The copy is answered instead when Canvas
+   * can't be asked: in a preview (no token), with a rejected token, or while Canvas is down.
    */
   router.get("/:id/syllabus", async (req, res) => {
     const { user } = currentAuth(res.locals);
     const userId = user.id;
     const course = await db.course.findFirst({ where: { id: idParam(req.params.id, courseNotFound()), userId } });
     if (!course) throw courseNotFound();
-    // The syllabus is read from Canvas each time, and a preview has no Canvas token.
-    if (isPreview(user)) throw previewUnavailable();
+    const kept = await keptSyllabus(db, userId, course.id);
+    const answerKept = () => {
+      if (!kept) return false;
+      res.json({ ...kept.syllabus, fetched_at: kept.fetchedAt.toISOString(), saved_copy: true });
+      return true;
+    };
+    if (isPreview(user)) {
+      if (answerKept()) return;
+      throw previewUnavailable();
+    }
     const connection = await db.canvasConnection.findUnique({ where: { userId } });
-    if (!connection) throw notConnected();
+    if (!connection) {
+      if (answerKept()) return;
+      throw notConnected();
+    }
     const files = await db.courseFile.findMany({
       where: { userId, courseId: course.id, removedAt: null },
       select: { id: true, canvasId: true, displayName: true },
     });
     try {
       const client = services.canvas(connection.baseUrl, openToken(services.secrets, connection.tokenCiphertext, userId));
-      res.json(await findSyllabus(client, course.canvasId, course.htmlUrl, files));
+      const syllabus = await findSyllabus(client, course.canvasId, course.htmlUrl, files);
+      const now = new Date();
+      await keepSyllabus(db, userId, course.id, syllabus, now);
+      res.json({ ...syllabus, fetched_at: now.toISOString(), saved_copy: false });
     } catch (error) {
       if (!(error instanceof CanvasError)) throw error;
       if (error.kind === "TOKEN_REJECTED") {
         await db.canvasConnection.updateMany({ where: { userId }, data: { status: "TOKEN_REJECTED" } });
+        if (answerKept()) return;
         throw new HttpError(409, "CANVAS_RECONNECT_REQUIRED", "Canvas no longer accepts your access token. Reconnect Canvas in Settings.");
       }
+      if (answerKept()) return;
       throw new HttpError(502, "CANVAS_UNAVAILABLE", error.message);
     }
   });

@@ -1,0 +1,183 @@
+// A task opened in place: when it's due, its score, how long is left and why, the time used so
+// far, progress, and the assignment's description from Canvas. Used time and progress save here
+// without opening the full editor.
+import { useEffect, useId, useState, type ReactNode } from "react";
+import { TASK_TYPE_LABELS, formatDue, formatMinutes, plural } from "./format";
+import { isSubmitted, parseSpent } from "./forms";
+import { CheckIcon } from "./icons";
+import { CanvasLink } from "./preview";
+import { useTaskDetail, useUpdateTask } from "./queries";
+import { useTaskEditor } from "./tasks";
+import { useToast } from "./toast";
+import type { Task } from "./types";
+import { Badge, Spinner } from "./ui";
+
+function basisLabel(task: Task): string {
+  if (task.remaining_basis === "pace") return "at your pace so far";
+  if (task.remaining_basis === "estimate") return "your estimate";
+  return `usual for ${(TASK_TYPE_LABELS[task.type] ?? "this type").toLowerCase()}`;
+}
+
+function scoreText(task: Task): string | null {
+  if (task.excused) return "Excused";
+  if (task.score === null) return null;
+  const points = task.points_possible !== null ? ` / ${task.points_possible}` : "";
+  const grade = task.grade && task.grade !== String(task.score) ? ` (${task.grade})` : "";
+  return `${task.score}${points}${grade}`;
+}
+
+function submissionText(task: Task): string | null {
+  if (task.source !== "canvas") return null;
+  if (task.submission_state === "graded") return "Graded";
+  if (task.submission_state === "submitted" || task.submission_state === "pending_review") return "Submitted";
+  return "Not submitted";
+}
+
+/** Minutes used so far: type a total and save it with the check button. */
+function UsedTime({ task }: { task: Task }) {
+  const update = useUpdateTask();
+  const toast = useToast();
+  const id = useId();
+  const [value, setValue] = useState(String(task.spent_minutes));
+  useEffect(() => setValue(String(task.spent_minutes)), [task.spent_minutes]);
+  const parsed = parseSpent(value);
+  const dirty = !parsed.error && parsed.minutes !== task.spent_minutes;
+  const save = () => {
+    if (!dirty) return;
+    update.mutate(
+      { id: task.id, changes: { spent_minutes: parsed.minutes } },
+      {
+        onSuccess: () => toast(`Time used saved: ${formatMinutes(parsed.minutes)}`, "success"),
+        onError: (error) => toast(error.message, "error"),
+      },
+    );
+  };
+  return (
+    <div className="task-card-used">
+      <label htmlFor={id} className="visually-hidden">
+        Minutes used on {task.title}
+      </label>
+      <input
+        id={id}
+        className="task-card-minutes"
+        type="number"
+        inputMode="numeric"
+        min={0}
+        step={5}
+        value={value}
+        aria-invalid={parsed.error ? true : undefined}
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            save();
+          }
+        }}
+      />
+      <span className="task-card-unit">min</span>
+      <button
+        type="button"
+        className="button small primary task-card-save"
+        disabled={!dirty || update.isPending}
+        onClick={save}
+        aria-label="Save time used"
+        title="Save time used"
+      >
+        {update.isPending ? <Spinner size={14} /> : <CheckIcon size={16} />}
+      </button>
+      {parsed.error ? <span className="field-error">{parsed.error}</span> : null}
+    </div>
+  );
+}
+
+/** Progress in 5% steps; saved when the slider is let go. */
+function Progress({ task }: { task: Task }) {
+  const update = useUpdateTask();
+  const toast = useToast();
+  const id = useId();
+  const [value, setValue] = useState(task.progress);
+  useEffect(() => setValue(task.progress), [task.progress]);
+  const commit = () => {
+    if (value === task.progress) return;
+    update.mutate({ id: task.id, changes: { progress: value } }, { onError: (error) => toast(error.message, "error") });
+  };
+  return (
+    <div className="field range-field task-card-progress">
+      <label htmlFor={id}>
+        Progress <output htmlFor={id}>{value}%</output>
+        {update.isPending ? <Spinner size={14} /> : null}
+      </label>
+      <input
+        id={id}
+        type="range"
+        min={0}
+        max={100}
+        step={5}
+        value={value}
+        onChange={(event) => setValue(Number(event.target.value))}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        onBlur={commit}
+      />
+    </div>
+  );
+}
+
+export function TaskCard({ task, now, zone, actions }: { task: Task; now: Date; zone: string; actions?: ReactNode }) {
+  const editor = useTaskEditor();
+  const detail = useTaskDetail(task.id, task.source === "canvas");
+  const submitted = isSubmitted(task);
+  const done = task.state === "done";
+  const score = scoreText(task);
+  const submission = submissionText(task);
+  const description = detail.data?.description;
+  return (
+    <div className="task-card">
+      <dl className="task-card-facts">
+        <div>
+          <dt>Due</dt>
+          <dd>{formatDue(task.due_at, now, zone)}</dd>
+        </div>
+        {task.points_possible !== null || submission ? (
+          <div>
+            <dt>{score ? "Score" : "Points"}</dt>
+            <dd>
+              {score ?? (task.points_possible !== null ? plural(task.points_possible, "pt") : "—")}
+              {submission ? <Badge tone={submitted ? "success" : "neutral"}>{submission}</Badge> : null}
+            </dd>
+          </div>
+        ) : null}
+        {done ? null : (
+          <div>
+            <dt>Time left</dt>
+            <dd>
+              {formatMinutes(task.remaining_minutes)} <span className="muted">· {basisLabel(task)}</span>
+            </dd>
+          </div>
+        )}
+        <div>
+          <dt>Time used</dt>
+          <dd>
+            <UsedTime task={task} />
+          </dd>
+        </div>
+      </dl>
+      {submitted || done ? null : <Progress task={task} />}
+      {task.source === "canvas" ? (
+        <details className="task-card-description">
+          <summary>Assignment description</summary>
+          {detail.isPending ? <Spinner size={16} label="Loading the description" /> : null}
+          {detail.data ? <p className="pre-wrap">{description ?? "Canvas has no description for this assignment."}</p> : null}
+        </details>
+      ) : null}
+      {task.notes ? <p className="task-card-notes pre-wrap">{task.notes}</p> : null}
+      <div className="task-card-actions">
+        {actions}
+        <button type="button" className="button small ghost" onClick={() => editor.open(task)}>
+          Edit
+        </button>
+        {task.html_url ? <CanvasLink href={task.html_url} className="button small ghost" iconSize={14} /> : null}
+      </div>
+    </div>
+  );
+}

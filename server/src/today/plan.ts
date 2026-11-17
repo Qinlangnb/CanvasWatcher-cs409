@@ -28,6 +28,8 @@ export interface PlanTask {
   pointsPossible: number | null;
   progress: number;
   estimatedMinutes: number | null;
+  /** Minutes spent so far; with progress it sets the work left. */
+  spentMinutes?: number;
   /** Local date the student started the task ahead of the plan, if any. */
   startedOn?: string | null;
 }

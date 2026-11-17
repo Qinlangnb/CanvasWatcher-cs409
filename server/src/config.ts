@@ -45,6 +45,17 @@ const environment = z.object({
    * identity taken out. Empty turns previews off.
    */
   PREVIEW_SOURCE_USERNAME: z.string().trim().max(64).default(""),
+  /**
+   * AI Chat: an OpenAI-compatible chat completions API (DeepSeek by default). One key serves every
+   * account, previews included. An empty key turns AI Chat off.
+   */
+  AI_API_KEY: z.string().trim().default(""),
+  AI_BASE_URL: z
+    .string()
+    .trim()
+    .default("https://api.deepseek.com/v1")
+    .refine((value) => /^https?:\/\/[^\s/?#]+(?:\/[^\s?#]*)?$/.test(value), "AI_BASE_URL must be an http(s) URL without a query"),
+  AI_MODEL: z.string().trim().min(1).max(100).default("deepseek-flash"),
 });
 
 export interface Config {
@@ -63,6 +74,15 @@ export interface Config {
   logLevel: string;
   /** Username previews copy, or null when previews are off. */
   previewSource: string | null;
+  /** AI Chat's provider, or null when it is off. */
+  ai: AiConfig | null;
+}
+
+export interface AiConfig {
+  /** Chat completions are posted to `${baseUrl}/chat/completions`. */
+  baseUrl: string;
+  apiKey: string;
+  model: string;
 }
 
 function list(value: string): string[] {
@@ -96,5 +116,8 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     trustProxy: values.TRUST_PROXY,
     logLevel: values.LOG_LEVEL,
     previewSource: values.PREVIEW_SOURCE_USERNAME || null,
+    ai: values.AI_API_KEY
+      ? { baseUrl: values.AI_BASE_URL.replace(/\/+$/, ""), apiKey: values.AI_API_KEY, model: values.AI_MODEL }
+      : null,
   };
 }

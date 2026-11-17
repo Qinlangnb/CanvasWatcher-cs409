@@ -27,7 +27,14 @@ export interface CanvasAssignment {
   points_possible?: number | null;
   html_url?: string;
   submission_types?: string[];
-  submission?: { workflow_state?: string; submitted_at?: string | null } | null;
+  submission?: {
+    workflow_state?: string;
+    submitted_at?: string | null;
+    /** Null until graded, and while the grade is hidden from the student. */
+    score?: number | null;
+    grade?: string | null;
+    excused?: boolean | null;
+  } | null;
 }
 
 export interface CanvasFile {
