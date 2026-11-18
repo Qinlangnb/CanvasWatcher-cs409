@@ -34,6 +34,7 @@ export const app = createApp({ config, db, logger, services });
 /** Waits for background syncs, then empties every table (user data cascades from users). */
 export async function resetDatabase(): Promise<void> {
   await services.sync.whenIdle();
+  await services.aiJobs.whenIdle();
   await db.$executeRaw`TRUNCATE users, sessions, login_attempts CASCADE`;
 }
 

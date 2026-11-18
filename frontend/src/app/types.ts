@@ -74,8 +74,8 @@ export interface Task {
   estimated_minutes: number | null;
   total_minutes: number;
   remaining_minutes: number;
-  /** What remaining_minutes comes from: the pace so far, the student's estimate, or the type's default. */
-  remaining_basis: "pace" | "estimate" | "default";
+  /** What remaining_minutes comes from: the pace so far, the student's estimate, the AI's estimate, or the type's default. */
+  remaining_basis: "pace" | "estimate" | "ai" | "default";
   /** Minutes the student has spent on it, as they report it. */
   spent_minutes: number;
   /** Canvas score and grade once Canvas shows them; null until graded or while hidden. */
@@ -160,16 +160,8 @@ export interface TaskDetail extends Task {
 export interface AiStatus {
   enabled: boolean;
   model: string | null;
-}
-
-export interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-}
-
-export interface ChatReply {
-  message: string;
-  tools_used: string[];
+  /** The user's own connection (Settings > AI API) or the server's default. AI Chat types live in aiApi.ts. */
+  source: "own" | "server" | null;
 }
 
 export type ChangeKind = "assignment" | "file" | "announcement";

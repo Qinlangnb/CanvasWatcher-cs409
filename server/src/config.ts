@@ -56,6 +56,11 @@ const environment = z.object({
     .default("https://api.deepseek.com/v1")
     .refine((value) => /^https?:\/\/[^\s/?#]+(?:\/[^\s?#]*)?$/.test(value), "AI_BASE_URL must be an http(s) URL without a query"),
   AI_MODEL: z.string().trim().min(1).max(100).default("deepseek-flash"),
+  /**
+   * Lets users pick a local Ollama in Settings > AI API. Off by default: on a hosted server those
+   * addresses reach into the server's own network.
+   */
+  AI_ALLOW_LOCAL: z.enum(["true", "false"]).default("false"),
 });
 
 export interface Config {
@@ -76,6 +81,8 @@ export interface Config {
   previewSource: string | null;
   /** AI Chat's provider, or null when it is off. */
   ai: AiConfig | null;
+  /** Whether users may choose a local Ollama as their own AI provider. */
+  aiAllowLocal: boolean;
 }
 
 export interface AiConfig {
@@ -119,5 +126,6 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     ai: values.AI_API_KEY
       ? { baseUrl: values.AI_BASE_URL.replace(/\/+$/, ""), apiKey: values.AI_API_KEY, model: values.AI_MODEL }
       : null,
+    aiAllowLocal: values.AI_ALLOW_LOCAL === "true",
   };
 }

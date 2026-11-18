@@ -23,22 +23,27 @@ export interface EffortInput {
   progress: number;
   /** Minutes the student reports having spent; 0 when they haven't said. */
   spentMinutes?: number;
+  /** The AI's estimate of the total (ai/insights.ts), when one was made. */
+  aiEstimate?: { minutes: number | null } | null;
 }
 
+const aiMinutes = (task: EffortInput) => task.aiEstimate?.minutes ?? null;
+
 export function totalMinutes(task: EffortInput): number {
-  return task.estimatedMinutes ?? defaultMinutes(task.taskType);
+  return task.estimatedMinutes ?? aiMinutes(task) ?? defaultMinutes(task.taskType);
 }
 
 /**
  * Where the remaining time comes from: the pace so far (time used and progress both given), the
- * student's own estimate, or the usual time for the task type.
+ * student's own estimate, the AI's estimate, or the usual time for the task type.
  */
-export type RemainingBasis = "pace" | "estimate" | "default";
+export type RemainingBasis = "pace" | "estimate" | "ai" | "default";
 
 export function remainingBasis(task: EffortInput): RemainingBasis {
   const progress = Math.min(100, Math.max(0, task.progress));
   if ((task.spentMinutes ?? 0) > 0 && progress > 0 && progress < 100) return "pace";
-  return task.estimatedMinutes === null ? "default" : "estimate";
+  if (task.estimatedMinutes !== null) return "estimate";
+  return aiMinutes(task) !== null ? "ai" : "default";
 }
 
 /** Rounds to 5 minutes; anything left at all is at least 5 minutes. */

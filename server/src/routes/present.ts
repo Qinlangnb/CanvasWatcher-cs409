@@ -88,8 +88,12 @@ export function taskState(task: Task, now = new Date()): TaskState {
   return task.dueAt && task.dueAt < now ? "overdue" : "open";
 }
 
-export type TaskWithCourse = Task & { course: CourseSummary };
-export const taskInclude = { course: { select: courseSummarySelect } } satisfies Prisma.TaskInclude;
+/** `aiEstimate` is the AI's estimate of the total work, used for time left when the student gave none. */
+export type TaskWithCourse = Task & { course: CourseSummary; aiEstimate?: { minutes: number | null } | null };
+export const taskInclude = {
+  course: { select: courseSummarySelect },
+  aiEstimate: { select: { minutes: true } },
+} satisfies Prisma.TaskInclude;
 
 export function presentTask(task: TaskWithCourse, now = new Date()) {
   const state = taskState(task, now);
@@ -112,7 +116,7 @@ export function presentTask(task: TaskWithCourse, now = new Date()) {
     estimated_minutes: task.estimatedMinutes,
     total_minutes: totalMinutes(task),
     remaining_minutes: state === "done" ? 0 : remainingMinutes(task),
-    /** What remaining_minutes is based on: the pace so far, the student's estimate, or the type's default. */
+    /** What remaining_minutes is based on: the pace so far, the student's estimate, the AI's estimate, or the type's default. */
     remaining_basis: remainingBasis(task),
     /** Minutes the student has spent on it, as they report it. */
     spent_minutes: task.spentMinutes,

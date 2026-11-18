@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation } from "react-router";
+import { AiSettingsSection } from "../aiSettings";
 import { ApiError } from "../api";
 import { ConnectCanvasForm } from "../canvas";
 import { ImportCalendarDialog } from "../events";
@@ -569,11 +570,12 @@ export function SettingsPage() {
   }, [location.hash, preview]);
   return (
     <div className="page">
-      <PageHeader title="Settings" description="Your study plan, calendars, account and the Canvas connection." />
+      <PageHeader title="Settings" description="Your study plan, calendars, account, the Canvas connection and AI." />
       <div className="settings-grid">
         <StudyPlanSection />
         <CalendarsSection />
         <CanvasSection />
+        <AiSettingsSection />
         <ProfileSection />
         {preview ? null : <PasswordSection />}
       </div>

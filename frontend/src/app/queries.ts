@@ -4,8 +4,6 @@ import { isApiError, request } from "./api";
 import type {
   AiStatus,
   CalendarEvent,
-  ChatMessage,
-  ChatReply,
   CalendarImport,
   CalendarSource,
   CanvasConnection,
@@ -342,17 +340,9 @@ export function useTaskDetail(id: number, enabled = true) {
   });
 }
 
-/** Whether this server has AI Chat set up. */
+/** Whether AI is available to this account (its own connection or the server's); AI Chat hooks are in aiApi.ts. */
 export function useAiStatus() {
   return useQuery({ queryKey: keys.ai, queryFn: () => request<AiStatus>("/api/ai"), staleTime: 10 * 60_000 });
-}
-
-/** One AI Chat turn. The conversation lives in the browser and is sent whole each time. */
-export function useAiChat() {
-  return useMutation({
-    mutationFn: (body: { messages: ChatMessage[]; page: { path: string; course_id: number | null } }) =>
-      request<ChatReply>("/api/ai/chat", { method: "POST", body }),
-  });
 }
 
 /**
