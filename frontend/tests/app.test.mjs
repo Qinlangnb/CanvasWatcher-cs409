@@ -214,7 +214,9 @@ test("due next week is a compact list under today's plan whose rows open into th
   assert.match(card, /<dt>Time left<\/dt>/);
   assert.match(card, /changes: \{ spent_minutes: parsed\.minutes \}/);
   assert.match(card, /aria-label="Save time used"/);
-  assert.match(card, /onPointerUp=\{commit\}/);
+  // Progress now saves with the task's revision (taskExtras.tsx).
+  assert.match(card, /<RevisionProgress task=\{task\} \/>/);
+  assert.match(read("app/taskExtras.tsx"), /onPointerUp=\{commit\}/);
   assert.match(card, /Assignment description/);
   assert.match(today, /changes: \{ start_today: start \}/);
   assert.match(today, /prefers-reduced-motion: reduce/);

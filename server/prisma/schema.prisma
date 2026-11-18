@@ -39,6 +39,10 @@ model User {
   calendars        CalendarSource[]
   events           CalendarEvent[]
   syllabi          CourseSyllabus[]
+  // Tasks parity: work timers, progress history and assignment attachments.
+  workSessions     WorkSession[]
+  taskProgress     TaskProgress[]
+  taskFileLinks    TaskFileLink[]
 
   @@index([previewExpiresAt])
   @@map("users")
@@ -212,6 +216,20 @@ model Task {
   notes            String?
   createdAt        DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  // --- Tasks parity: timers, revisions, date-only deadlines (see tasks/work.ts, tasks/progress.ts) ---
+  /// Bumped by every progress, completion or ignore change; writers compare-and-swap on it, so a
+  /// stale tab can't overwrite newer work.
+  stateRevision    Int        @default(0) @map("state_revision")
+  /// Seconds of finished work-timer sessions. Time used is this plus spentMinutes, which is the
+  /// student's manual correction (it may be negative).
+  trackedSeconds   Int        @default(0) @map("tracked_seconds")
+  /// Newest client time a timer heartbeat reported; older heartbeats are ignored.
+  lastClientReportedAt DateTime? @map("last_client_reported_at") @db.Timestamptz(3)
+  /// The deadline is a day without a time (personal tasks); dueAt is 23:59 local time that day.
+  dueDateOnly      Boolean    @default(false) @map("due_date_only")
+  workSessions     WorkSession[]
+  progressHistory  TaskProgress[]
+  fileLinks        TaskFileLink[]
 
   @@unique([courseId, canvasId])
   @@index([userId, dueAt])
@@ -230,6 +248,10 @@ model CourseFile {
   contentType     String?   @map("content_type")
   sizeBytes       Int       @map("size_bytes")
   canvasUpdatedAt DateTime? @map("canvas_updated_at") @db.Timestamptz(3)
+  /// lecture, homework, discussion, reading, exam, solution or other; set by sync (see files/types.ts).
+  detectedType    String    @default("other") @map("detected_type")
+  /// The student's own choice, which wins over detectedType and survives syncs.
+  userOverrideType String?  @map("user_override_type")
   removedAt       DateTime? @map("removed_at") @db.Timestamptz(3)
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
@@ -369,4 +391,58 @@ model CourseSyllabus {
 
   @@index([userId])
   @@map("course_syllabi")
+}
+
+/// One stretch of a task's work timer. A user has at most one open session (ended_at null); a
+/// partial unique index in the migration enforces it, so starting another task's timer stops this one.
+model WorkSession {
+  id              Int       @id @default(autoincrement())
+  userId          String    @map("user_id") @db.Uuid
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taskId          Int       @map("task_id")
+  task            Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  startedAt       DateTime  @map("started_at") @db.Timestamptz(3)
+  endedAt         DateTime? @map("ended_at") @db.Timestamptz(3)
+  durationSeconds Int?      @map("duration_seconds")
+  /// How the session was recorded; only "timer" so far.
+  source          String    @default("timer")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([taskId, startedAt])
+  @@index([userId, endedAt])
+  @@map("task_work_sessions")
+}
+
+/// Every applied progress or completion change, oldest first; the task row holds the current state.
+model TaskProgress {
+  id         Int      @id @default(autoincrement())
+  userId     String   @map("user_id") @db.Uuid
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taskId     Int      @map("task_id")
+  task       Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  /// When the student made the change (the client's action time), not when it arrived.
+  recordedAt DateTime @map("recorded_at") @db.Timestamptz(3)
+  progress   Int
+  completed  Boolean
+  /// user, heartbeat or reopen.
+  origin     String
+
+  @@index([taskId, recordedAt])
+  @@index([userId])
+  @@map("task_progress")
+}
+
+/// A Canvas file linked from an assignment's description in the same course; offered as
+/// "Download assignment". Kept by Canvas file id, so it resolves to whatever file row sync holds.
+model TaskFileLink {
+  id           Int    @id @default(autoincrement())
+  userId       String @map("user_id") @db.Uuid
+  user         User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taskId       Int    @map("task_id")
+  task         Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  fileCanvasId String @map("file_canvas_id")
+
+  @@unique([taskId, fileCanvasId])
+  @@index([userId])
+  @@map("task_file_links")
 }

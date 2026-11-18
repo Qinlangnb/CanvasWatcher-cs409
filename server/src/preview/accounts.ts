@@ -202,6 +202,23 @@ async function copyAccount(tx: Prisma.TransactionClient, template: User, userId:
     })),
   });
 
+  // Assignment attachments, found again by each copied task's (course, Canvas id).
+  const links = await tx.taskFileLink.findMany({
+    where: { userId: from },
+    select: { fileCanvasId: true, task: { select: { courseId: true, canvasId: true } } },
+  });
+  if (links.length > 0) {
+    const copiedTasks = await tx.task.findMany({ where: { userId, source: "CANVAS" }, select: { id: true, courseId: true, canvasId: true } });
+    const taskByKey = new Map(copiedTasks.map((task) => [`${task.courseId}|${task.canvasId}`, task.id]));
+    await tx.taskFileLink.createMany({
+      data: links.flatMap((link) => {
+        const taskId = taskByKey.get(`${course(link.task.courseId)}|${link.task.canvasId}`);
+        return taskId === undefined ? [] : [{ userId, taskId, fileCanvasId: link.fileCanvasId }];
+      }),
+      skipDuplicates: true,
+    });
+  }
+
   const files = await tx.courseFile.findMany({ where: { userId: from }, orderBy: { id: "asc" } });
   await tx.courseFile.createMany({
     data: files.map(({ id: _id, userId: _owner, createdAt: _created, updatedAt: _updated, ...file }) => ({

@@ -21,8 +21,15 @@ export interface EffortInput {
   taskType: string;
   estimatedMinutes: number | null;
   progress: number;
-  /** Minutes the student reports having spent; 0 when they haven't said. */
+  /** The student's manual correction of time used, in minutes (may be negative); 0 when they haven't said. */
   spentMinutes?: number;
+  /** Seconds of finished work-timer sessions. */
+  trackedSeconds?: number;
+}
+
+/** Time used: finished timer sessions plus the student's manual correction, never below zero. */
+export function usedMinutes(task: Pick<EffortInput, "spentMinutes" | "trackedSeconds">): number {
+  return Math.max(0, Math.round((task.trackedSeconds ?? 0) / 60) + (task.spentMinutes ?? 0));
 }
 
 export function totalMinutes(task: EffortInput): number {
@@ -37,7 +44,7 @@ export type RemainingBasis = "pace" | "estimate" | "default";
 
 export function remainingBasis(task: EffortInput): RemainingBasis {
   const progress = Math.min(100, Math.max(0, task.progress));
-  if ((task.spentMinutes ?? 0) > 0 && progress > 0 && progress < 100) return "pace";
+  if (usedMinutes(task) > 0 && progress > 0 && progress < 100) return "pace";
   return task.estimatedMinutes === null ? "default" : "estimate";
 }
 
@@ -55,7 +62,7 @@ export function remainingMinutes(task: EffortInput): number {
   const progress = Math.min(100, Math.max(0, task.progress));
   if (progress >= 100) return 0;
   if (remainingBasis(task) === "pace") {
-    return roundFive(((task.spentMinutes ?? 0) * (100 - progress)) / progress);
+    return roundFive((usedMinutes(task) * (100 - progress)) / progress);
   }
   return roundFive(totalMinutes(task) * (1 - progress / 100));
 }

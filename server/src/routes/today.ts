@@ -12,6 +12,14 @@ const DAY_MS = 86_400_000;
 /** "Due next week" runs from now through the end of the 7th local day after today. */
 export const UPCOMING_DAYS = 7;
 
+/** The original app's priority buckets over the plan score (0-1). */
+export function priorityBucket(score: number): "Low" | "Medium" | "High" | "Critical" {
+  if (score >= 0.9) return "Critical";
+  if (score >= 0.72) return "High";
+  if (score >= 0.45) return "Medium";
+  return "Low";
+}
+
 export function todayRouter(db: Db): Router {
   const router = Router();
 
@@ -83,6 +91,7 @@ export function todayRouter(db: Db): Router {
       items: plan.items.map((item) => ({
         task: presentTask(byId.get(item.taskId) as (typeof tasks)[number], now),
         score: item.score,
+        priority_bucket: priorityBucket(item.score),
         remaining_minutes: item.remainingMinutes,
         planned_minutes: item.plannedMinutes,
         slack_minutes: item.slackMinutes,
@@ -96,6 +105,7 @@ export function todayRouter(db: Db): Router {
           remaining_minutes: item?.remainingMinutes ?? remainingMinutes(task),
           planned_minutes: item?.plannedMinutes ?? 0,
           reasons: item?.reasons ?? [],
+          priority_bucket: item ? priorityBucket(item.score) : null,
         };
       }),
       upcoming_through: new Date(upcomingEnd.getTime() - 1).toISOString(),

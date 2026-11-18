@@ -10,7 +10,10 @@ import type {
   Task,
 } from "../generated/prisma/client.js";
 import type { Db } from "../db.js";
-import { remainingBasis, remainingMinutes, totalMinutes } from "../tasks/effort.js";
+import { normalizeCourseDisplay, normalizeTerm } from "../courses/terms.js";
+import { effectiveFileType } from "../files/types.js";
+import { remainingBasis, remainingMinutes, totalMinutes, usedMinutes } from "../tasks/effort.js";
+import { safeTaskUrl } from "../tasks/links.js";
 
 const iso = (date: Date | null) => (date ? date.toISOString() : null);
 const lower = <T extends string>(value: T) => value.toLowerCase() as Lowercase<T>;
@@ -64,13 +67,25 @@ export interface CourseCounts {
 }
 
 export function presentCourse(course: Course, counts: CourseCounts) {
+  const term = normalizeTerm(course.termName, course.termStartAt, course.termEndAt);
+  const display = normalizeCourseDisplay(course.courseCode, course.name, course.termName);
   return {
     id: course.id,
     canvas_id: course.canvasId,
     code: course.courseCode,
     name: course.name,
+    /** "CS 409" and the section ("Section AL1"), read from Canvas's code and name. */
+    display_code: display.code,
+    section: display.section,
     term: course.termName
-      ? { name: course.termName, start_at: iso(course.termStartAt), end_at: iso(course.termEndAt) }
+      ? {
+          name: course.termName,
+          start_at: iso(course.termStartAt),
+          end_at: iso(course.termEndAt),
+          id: term.id,
+          display_name: term.displayName,
+          sort_key: term.sortKey,
+        }
       : null,
     html_url: course.htmlUrl,
     archived: course.archivedAt !== null,
@@ -114,8 +129,16 @@ export function presentTask(task: TaskWithCourse, now = new Date()) {
     remaining_minutes: state === "done" ? 0 : remainingMinutes(task),
     /** What remaining_minutes is based on: the pace so far, the student's estimate, or the type's default. */
     remaining_basis: remainingBasis(task),
-    /** Minutes the student has spent on it, as they report it. */
-    spent_minutes: task.spentMinutes,
+    /** Minutes used: finished timer sessions plus the student's correction (a running timer is not included). */
+    spent_minutes: usedMinutes(task),
+    tracked_minutes: Math.round(task.trackedSeconds / 60),
+    manual_adjustment_minutes: task.spentMinutes,
+    /** Send back as expected_revision with progress and completion changes. */
+    state_revision: task.stateRevision,
+    /** The validated page a task card opens, or null. */
+    source_url: safeTaskUrl(task.htmlUrl),
+    /** date_only when the deadline is a day without a time; due_at is then 23:59 local that day. */
+    deadline_precision: task.dueAt ? (task.dueDateOnly ? "date_only" : "exact") : null,
     /** Canvas score and grade, once Canvas shows them to the student. */
     score: task.score,
     grade: task.grade,
@@ -146,6 +169,10 @@ export function presentFile(file: CourseFile & { course: CourseSummary }) {
     size_bytes: file.sizeBytes,
     updated_at: iso(file.canvasUpdatedAt),
     download_url: `/api/files/${file.id}/download`,
+    /** lecture, homework, discussion, reading, exam, solution or other: the student's choice, else detected. */
+    type: effectiveFileType(file),
+    detected_type: file.detectedType,
+    user_override_type: file.userOverrideType,
   };
 }
 

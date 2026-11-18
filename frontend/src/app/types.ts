@@ -42,7 +42,10 @@ export interface CourseSummary {
 
 export interface Course extends CourseSummary {
   canvas_id: string;
-  term: { name: string; start_at: string | null; end_at: string | null } | null;
+  /** "CS 409" and the section, read from Canvas's code and name. */
+  display_code: string;
+  section: string | null;
+  term: { name: string; start_at: string | null; end_at: string | null; id: string; display_name: string; sort_key: string } | null;
   html_url: string;
   archived: boolean;
   last_seen_at: string;
@@ -85,6 +88,16 @@ export interface Task {
   /** Local date (YYYY-MM-DD) the student started it ahead of the plan; that day's plan includes it. */
   started_on: string | null;
   notes: string | null;
+  // --- Tasks parity: timers, revisions, links ---
+  /** Finished timer minutes; spent_minutes adds the manual correction (a running timer is not included). */
+  tracked_minutes: number;
+  manual_adjustment_minutes: number;
+  /** Send back as expected_revision with progress and completion changes. */
+  state_revision: number;
+  /** The validated page the task card opens, or null. */
+  source_url: string | null;
+  /** date_only: the deadline is a day without a time. */
+  deadline_precision: "exact" | "date_only" | null;
 }
 
 export interface TaskChanges {
@@ -99,6 +112,8 @@ export interface TaskChanges {
   title?: string;
   type?: TaskType;
   due_at?: string | null;
+  due_date_only?: boolean;
+  expected_revision?: number;
 }
 
 export interface NewTask {
@@ -108,7 +123,10 @@ export interface NewTask {
   due_at: string | null;
   estimated_minutes: number | null;
   notes: string | null;
+  due_date_only?: boolean;
 }
+
+export type FileType = "lecture" | "homework" | "discussion" | "reading" | "exam" | "solution" | "other";
 
 export interface CourseFile {
   id: number;
@@ -118,7 +136,49 @@ export interface CourseFile {
   size_bytes: number;
   updated_at: string | null;
   download_url: string;
+  /** The student's choice, else the detected type. */
+  type: FileType;
+  detected_type: string;
+  user_override_type: FileType | null;
 }
+
+export interface TaskAttachment {
+  file_id: number;
+  filename: string;
+  download_url: string;
+}
+
+export interface CourseTerm {
+  term_id: string;
+  display_name: string;
+  start_at: string | null;
+  end_at: string | null;
+  sort_key: string;
+  active_course_count: number;
+  archived_course_count: number;
+  is_default: boolean;
+}
+
+/** A task's timer totals (GET /api/tasks/:id/work and friends). */
+export interface WorkSummary {
+  task_id: number;
+  state_revision: number;
+  local_completed: boolean;
+  tracked_minutes: number;
+  manual_adjustment_minutes: number;
+  effective_used_minutes: number;
+  active_session_id: number | null;
+  active_started_at: string | null;
+  active_elapsed_seconds: number;
+  switched_from_task_id?: number | null;
+}
+
+export interface ActiveWork extends WorkSummary {
+  task_title: string;
+  course: CourseSummary;
+}
+
+export type PriorityBucket = "Low" | "Medium" | "High" | "Critical";
 
 export interface FilePage {
   items: CourseFile[];
@@ -155,6 +215,7 @@ export interface Syllabus {
 /** One task with the assignment's description from Canvas. */
 export interface TaskDetail extends Task {
   description: string | null;
+  attachments: TaskAttachment[];
 }
 
 export interface AiStatus {
@@ -219,10 +280,13 @@ export interface TodayItem {
   planned_minutes: number;
   slack_minutes: number | null;
   reasons: TodayReason[];
+  priority_bucket: PriorityBucket;
 }
 
 /** Work due soon; `planned_minutes` is 0 when today's plan doesn't (yet) give it time. */
-export type UpcomingItem = Pick<TodayItem, "task" | "remaining_minutes" | "planned_minutes" | "reasons">;
+export type UpcomingItem = Pick<TodayItem, "task" | "remaining_minutes" | "planned_minutes" | "reasons"> & {
+  priority_bucket: PriorityBucket | null;
+};
 
 export interface Today {
   date: string;

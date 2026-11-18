@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useSearchParams } from "react-router";
 import { EventDialog, ImportCalendarDialog } from "../events";
 import { formatMinutes, formatTime } from "../format";
-import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon, ClipboardIcon, PlusIcon, UploadIcon } from "../icons";
+import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon, ClipboardIcon, ClockIcon, PlusIcon, UploadIcon } from "../icons";
 import { TaskList } from "../lists";
 import { useEvents, usePlanZone, useSettings, useTasks } from "../queries";
 import { useNow } from "../shell";
@@ -23,8 +23,10 @@ import {
   weekdayLabel,
   type TimelineDay,
 } from "../zoned";
+import { CalendarSwimlane } from "../courseViews";
 
-type View = "week" | "timeline";
+/** "timeline" is the swimlane chart; "workload" the day-by-day list measured against the daily goal. */
+type View = "week" | "timeline" | "workload";
 const TIMELINE_DAYS = 28;
 
 const isDate = (value: string | null): value is string => value !== null && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));
@@ -207,7 +209,7 @@ export function CalendarPage() {
   const now = useNow();
   const today = localDate(now, zone);
   const [search, setSearch] = useSearchParams();
-  const view: View = search.get("view") === "timeline" ? "timeline" : "week";
+  const view: View = search.get("view") === "timeline" ? "timeline" : search.get("view") === "workload" ? "workload" : "week";
   const anchor = isDate(search.get("date")) ? (search.get("date") as string) : today;
   const dates = weekOf(anchor);
   const thisWeek = dates.includes(today);
@@ -255,8 +257,12 @@ export function CalendarPage() {
             Week
           </button>
           <button type="button" aria-pressed={view === "timeline"} onClick={() => go({ view: "timeline" })}>
-            <ClipboardIcon size={16} />
+            <ClockIcon size={16} />
             Timeline
+          </button>
+          <button type="button" aria-pressed={view === "workload"} onClick={() => go({ view: "workload" })}>
+            <ClipboardIcon size={16} />
+            Workload
           </button>
         </div>
         {view === "week" ? (
@@ -277,11 +283,9 @@ export function CalendarPage() {
         ) : null}
       </div>
 
-      {view === "week" ? (
-        <WeekView dates={dates} today={today} zone={zone} onEvent={openEvent} />
-      ) : (
-        <TimelineView today={today} zone={zone} now={now} />
-      )}
+      {view === "week" ? <WeekView dates={dates} today={today} zone={zone} onEvent={openEvent} /> : null}
+      {view === "timeline" ? <CalendarSwimlane now={now} zone={zone} /> : null}
+      {view === "workload" ? <TimelineView today={today} zone={zone} now={now} /> : null}
 
       {dialog ? (
         <EventDialog

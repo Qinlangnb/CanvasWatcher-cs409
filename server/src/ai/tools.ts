@@ -149,7 +149,7 @@ function taskFacts(task: TaskWithCourse, ctx: ToolContext) {
     grade: task.grade,
     excused: task.excused,
     progress_percent: task.progress,
-    minutes_used: task.spentMinutes,
+    minutes_used: shown.spent_minutes,
     minutes_left: shown.remaining_minutes,
   };
 }

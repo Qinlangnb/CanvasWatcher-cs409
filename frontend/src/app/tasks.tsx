@@ -39,7 +39,8 @@ export function TaskEditorProvider({ children }: { children: ReactNode }) {
   const editor = useMemo<Editor>(() => {
     const setDone = async (task: Task, done: boolean) => {
       try {
-        await update.mutateAsync({ id: task.id, changes: { done } });
+        // The revision guards against a tab showing an older state; Undo below acts on the new one.
+        await update.mutateAsync({ id: task.id, changes: { done, expected_revision: task.state_revision } });
       } catch (error) {
         toast((error as Error).message, "error");
         return;
@@ -341,6 +342,8 @@ function NewTaskDialog({ open, courseId, onClose }: { open: boolean; courseId?: 
   const [title, setTitle] = useState("");
   const [type, setType] = useState<TaskType>("homework");
   const [due, setDue] = useState("");
+  /** A day without a time; shown as "Time not specified by source". */
+  const [dateOnly, setDateOnly] = useState(false);
   const [estimate, setEstimate] = useState("");
   const [notes, setNotes] = useState("");
   const [local, setLocal] = useState<Record<string, string>>({});
@@ -361,7 +364,15 @@ function NewTaskDialog({ open, courseId, onClose }: { open: boolean; courseId?: 
     setLocal(problems);
     if (Object.keys(problems).length > 0) return;
     create.mutate(
-      { course_id: Number(chosen), title: title.trim(), type, due_at: dueAt, estimated_minutes: parsed.minutes, notes: notes.trim() || null },
+      {
+        course_id: Number(chosen),
+        title: title.trim(),
+        type,
+        due_at: dueAt,
+        ...(dateOnly && dueAt ? { due_date_only: true } : {}),
+        estimated_minutes: parsed.minutes,
+        notes: notes.trim() || null,
+      },
       {
         onSuccess: (task) => {
           toast(`Added: ${task.title}`);
@@ -435,8 +446,26 @@ function NewTaskDialog({ open, courseId, onClose }: { open: boolean; courseId?: 
           <SelectField label="Type" value={type} onChange={(event) => setType(event.target.value as TaskType)} error={fields.type}>
             <TypeOptions />
           </SelectField>
-          <Field label="Due (optional)" type="datetime-local" value={due} onChange={(event) => setDue(event.target.value)} hint={zoneHint(zone)} error={fields.due_at} />
+          <Field
+            label="Due (optional)"
+            type={dateOnly ? "date" : "datetime-local"}
+            value={due}
+            onChange={(event) => setDue(event.target.value)}
+            hint={dateOnly ? "Any time that day." : zoneHint(zone)}
+            error={fields.due_at}
+          />
         </div>
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={dateOnly}
+            onChange={(event) => {
+              setDateOnly(event.target.checked);
+              setDue((value) => (event.target.checked ? value.slice(0, 10) : value ? `${value.slice(0, 10)}T23:59` : ""));
+            }}
+          />
+          <span>No specific time</span>
+        </label>
         <Field
           label="Total time it takes, in minutes (optional)"
           inputMode="numeric"

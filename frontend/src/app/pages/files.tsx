@@ -4,6 +4,7 @@ import { FolderIcon, SearchIcon } from "../icons";
 import { FileTable } from "../lists";
 import { useCourses, useFiles } from "../queries";
 import { EmptyState, LoadMoreButton, PageHeader, QueryError, SkeletonList, usePages } from "../ui";
+import { FileTypeTabs, useFileTypeParam } from "../fileTypes";
 
 function useDebounced<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -19,9 +20,10 @@ export function FilesPage() {
   const [courseId, setCourseId] = useState<number | undefined>();
   const q = useDebounced(text.trim(), 250);
   const courses = useCourses();
-  const [pages, more] = usePages(`${courseId ?? ""}|${q}`);
-  const files = useFiles({ courseId, q: q || undefined, pages });
-  const filtered = Boolean(q || courseId);
+  const [type, setType] = useFileTypeParam();
+  const [pages, more] = usePages(`${courseId ?? ""}|${q}|${type ?? ""}`);
+  const files = useFiles({ courseId, q: q || undefined, type, pages });
+  const filtered = Boolean(q || courseId || type);
   const items = files.data?.items;
   const hasMore = files.data?.hasMore ?? false;
   // With more pages to load the total is unknown, so the count says how many are shown.
@@ -48,6 +50,7 @@ export function FilesPage() {
           </select>
         </label>
       </form>
+      <FileTypeTabs value={type} onChange={setType} />
 
       <section className="card" aria-label="Files">
         {files.isPending ? <SkeletonList rows={5} label="Loading files" /> : null}
@@ -59,7 +62,7 @@ export function FilesPage() {
         ) : null}
         {items?.length === 0 ? (
           <EmptyState icon={<FolderIcon size={28} />} title={filtered ? "No matching files" : "No files yet"}>
-            {filtered ? "Try a shorter name or another course." : "Files appear here when your courses share them in Canvas."}
+            {filtered ? "Try a shorter name, another course or another type." : "Files appear here when your courses share them in Canvas."}
           </EmptyState>
         ) : null}
         {items && items.length > 0 ? <FileTable files={items} /> : null}

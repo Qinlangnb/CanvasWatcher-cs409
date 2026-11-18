@@ -20,6 +20,7 @@ import { syncRouter } from "./routes/sync.js";
 import { tasksRouter } from "./routes/tasks.js";
 import { todayRouter } from "./routes/today.js";
 import { usersRouter } from "./routes/users.js";
+import { workRouter } from "./routes/work.js";
 import type { Services } from "./services.js";
 
 export interface AppDependencies {
@@ -65,6 +66,7 @@ export function createApp({ config, db, logger, services }: AppDependencies): Ex
   app.use("/api/files", requireUser, filesRouter(db, services));
   app.use("/api/changes", requireUser, changesRouter(db));
   app.use("/api/today", requireUser, todayRouter(db));
+  app.use("/api/work", requireUser, workRouter(db));
   app.use("/api/calendar", requireUser, calendarRouter(db));
   app.use("/api/settings", requireUser, settingsRouter(db));
   app.use("/api/ai", requireUser, aiRouter(db, services));
