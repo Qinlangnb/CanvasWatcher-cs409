@@ -1,20 +1,30 @@
-import express, { Router } from "express";
+import { Router } from "express";
+import { DateTime, IANAZone } from "luxon";
 import { z } from "zod";
 import { currentAuth } from "../auth/middleware.js";
-import { eventInclude, eventsBetween, presentEvent, type EventWithSource } from "../calendar/events.js";
-import { IcsError, parseIcs } from "../calendar/ics.js";
+import { capacityBetween, layersBetween } from "../calendar/capacity.js";
+import {
+  EVENT_TYPES,
+  busyTime,
+  eventInclude,
+  loadAvailability,
+  loadCommutes,
+  occurrencesBetween,
+  presentEvent,
+  presentOccurrence,
+  type EventWithSource,
+} from "../calendar/events.js";
+import { RecurrenceError, normalizeRule } from "../calendar/recurrence.js";
 import type { Db } from "../db.js";
 import { FieldError, HttpError } from "../http/errors.js";
 import { idParam, parseQuery } from "../http/params.js";
+import { availabilityRouter } from "./availability.js";
+import { calendarSourcesRouter } from "./calendarSources.js";
 import { getSettings } from "./settings.js";
 
-/** An .ics file of a full semester with recurring classes is typically well under 1 MB. */
-export const ICS_BODY_LIMIT = "1.5mb";
-const MAX_SOURCES = 20;
+export { ICS_BODY_LIMIT, isIcsUpload } from "./calendarSources.js";
+
 const DAY_MS = 86_400_000;
-/** Imports keep events from a month back to a year ahead. */
-const IMPORT_PAST_DAYS = 31;
-const IMPORT_FUTURE_DAYS = 366;
 
 const instantString = z.iso.datetime({ offset: true, error: "Use a date and time with a time zone." });
 
@@ -33,29 +43,46 @@ const location = z.string().trim().max(200, "Use at most 200 characters.");
 const eventFields = z.object({
   title,
   location: location.nullable(),
+  description: z.string().trim().max(5000, "Use at most 5,000 characters.").nullable(),
   all_day: z.boolean({ error: "Send all_day as true or false." }),
   start: z.string({ error: "Choose when the event starts." }),
   end: z.string({ error: "Choose when the event ends." }),
   busy: z.boolean({ error: "Send busy as true or false." }),
+  /** IANA zone of the wall-clock times; null follows the user's zone. */
+  time_zone: z.string().trim().max(64).nullable(),
+  event_type: z.enum(EVENT_TYPES, { error: "Choose class, busy, personal, study or other." }),
+  course_id: z.number().int().positive().nullable(),
+  recurrence_rule: z.string().trim().max(512, "Use at most 512 characters.").nullable(),
 });
-const eventCreation = eventFields.partial({ location: true, all_day: true, busy: true }).strict();
+const eventCreation = eventFields
+  .partial({ location: true, description: true, all_day: true, busy: true, time_zone: true, event_type: true, course_id: true, recurrence_rule: true })
+  .strict();
 const eventChanges = eventFields.partial().strict();
 
-const sourceCreation = z
-  .object({
-    name: z.string().trim().max(100, "Use at most 100 characters.").optional(),
-    file_name: z.string().trim().max(255).optional(),
-    ics: z.string({ error: "Choose an .ics file." }).min(1, "Choose an .ics file."),
-  })
-  .strict();
-
 const eventNotFound = () => new HttpError(404, "EVENT_NOT_FOUND", "That event could not be found.");
-const sourceNotFound = () => new HttpError(404, "CALENDAR_NOT_FOUND", "That calendar could not be found.");
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const LOCAL = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/;
+
+/**
+ * One timed boundary: an instant with an offset, or a wall-clock time read in `zone`. Wall-clock
+ * times that fall in a daylight-saving gap, or happen twice in an overlap, are refused.
+ */
+function timedValue(field: "start" | "end", value: string, zone: string): Date {
+  if (instantString.safeParse(value).success) return new Date(value);
+  if (!LOCAL.test(value)) throw new FieldError(field, "Use a date and time like 2026-11-06T09:00.");
+  const time = DateTime.fromISO(value, { zone });
+  if (!time.isValid || time.toFormat("yyyy-MM-dd'T'HH:mm") !== value.slice(0, 16)) {
+    throw new FieldError(field, "Invalid local time or a daylight-saving time gap. Choose another time.");
+  }
+  if (time.getPossibleOffsets().length > 1) {
+    throw new FieldError(field, "This time occurs twice at the daylight-saving transition. Choose an unambiguous time.");
+  }
+  return time.toJSDate();
+}
 
 /** Turns the start and end strings into stored instants, checking they fit the kind of event. */
-function eventTimes(allDay: boolean, start: string, end: string): { startAt: Date; endAt: Date } {
+function eventTimes(allDay: boolean, start: string, end: string, zone: string): { startAt: Date; endAt: Date } {
   if (allDay) {
     const startAt = new Date(`${start}T00:00:00.000Z`);
     const endAt = new Date(`${end}T00:00:00.000Z`);
@@ -65,27 +92,33 @@ function eventTimes(allDay: boolean, start: string, end: string): { startAt: Dat
     if (endAt.getTime() - startAt.getTime() > 31 * DAY_MS) throw new FieldError("end", "Keep an event to 31 days or fewer.");
     return { startAt, endAt };
   }
-  if (!instantString.safeParse(start).success) throw new FieldError("start", "Use a date and time with a time zone.");
-  if (!instantString.safeParse(end).success) throw new FieldError("end", "Use a date and time with a time zone.");
-  const startAt = new Date(start);
-  const endAt = new Date(end);
+  const startAt = timedValue("start", start, zone);
+  const endAt = timedValue("end", end, zone);
   if (endAt <= startAt) throw new FieldError("end", "End the event after it starts.");
   if (endAt.getTime() - startAt.getTime() > 7 * DAY_MS) throw new FieldError("end", "Keep an event to 7 days or fewer.");
   return { startAt, endAt };
 }
 
-function presentSource(source: { id: number; name: string; fileName: string | null; importedAt: Date }, eventCount: number) {
-  return {
-    id: source.id,
-    name: source.name,
-    file_name: source.fileName,
-    imported_at: source.importedAt.toISOString(),
-    event_count: eventCount,
-  };
+function checkZone(zone: string | null | undefined): void {
+  if (zone && !IANAZone.isValidZone(zone)) {
+    throw new FieldError("time_zone", "Unknown time zone; use an IANA time zone such as America/Chicago.");
+  }
+}
+
+function checkRule(rule: string | null | undefined): string | null {
+  if (!rule) return null;
+  try {
+    return normalizeRule(rule);
+  } catch (error) {
+    if (error instanceof RecurrenceError) throw new FieldError("recurrence_rule", error.message);
+    throw error;
+  }
 }
 
 export function calendarRouter(db: Db): Router {
   const router = Router();
+  router.use("/sources", calendarSourcesRouter(db));
+  router.use("/availability", availabilityRouter(db));
 
   async function findEvent(userId: string, rawId: string | undefined): Promise<EventWithSource> {
     const event = await db.calendarEvent.findFirst({
@@ -106,26 +139,92 @@ export function calendarRouter(db: Db): Router {
     }
   }
 
+  /** A linked course must be one of the user's own. */
+  async function checkCourse(userId: string, courseId: number | null | undefined): Promise<void> {
+    if (courseId == null) return;
+    if (!(await db.course.findFirst({ where: { id: courseId, userId }, select: { id: true } }))) {
+      throw new FieldError("course_id", "Choose one of your courses.");
+    }
+  }
+
+  async function rangeData(userId: string, from: Date, to: Date) {
+    const settings = await getSettings(db, userId);
+    const zone = settings.timeZone;
+    const first = DateTime.fromJSDate(from, { zone }).toISODate() as string;
+    const last = DateTime.fromJSDate(to, { zone }).toISODate() as string;
+    const [{ occurrences, warnings }, commutes, availability] = await Promise.all([
+      occurrencesBetween(db, userId, from, to, zone),
+      loadCommutes(db, userId),
+      loadAvailability(db, userId, first, last),
+    ]);
+    return { zone, occurrences, warnings, commutes, availability, ...busyTime(occurrences, warnings, commutes, { from, to }) };
+  }
+
   router.get("/events", async (req, res) => {
     const userId = currentAuth(res.locals).user.id;
     const { from, to } = parseQuery(rangeQuery, req.query);
     const settings = await getSettings(db, userId);
-    const events = await eventsBetween(db, userId, from, to, settings.timeZone);
-    res.json(events.map(presentEvent));
+    const { occurrences } = await occurrencesBetween(db, userId, from, to, settings.timeZone);
+    res.json(occurrences.map(presentOccurrence));
+  });
+
+  /**
+   * Everything the calendar page draws for [from, to): occurrences, background layers (study
+   * windows, commute, bridged class gaps) and warnings for stored events that can't be expanded.
+   */
+  router.get("/view", async (req, res) => {
+    const userId = currentAuth(res.locals).user.id;
+    const { from, to } = parseQuery(rangeQuery, req.query);
+    const data = await rangeData(userId, from, to);
+    const layers = layersBetween({ from, to, zone: data.zone, availability: data.availability, events: data.events, commutes: data.commutes });
+    res.json({
+      time_zone: data.zone,
+      events: data.occurrences.map(presentOccurrence),
+      layers: layers.map((layer) => ({ kind: layer.kind, start: layer.start.toISOString(), end: layer.end.toISOString() })),
+      warnings: data.warnings,
+    });
+  });
+
+  /** Free study minutes in [from, to); null minutes mean no availability is configured there. */
+  router.get("/capacity", async (req, res) => {
+    const userId = currentAuth(res.locals).user.id;
+    const { from, to } = parseQuery(rangeQuery, req.query);
+    const data = await rangeData(userId, from, to);
+    res.json({ ...capacityBetween({ from, to, zone: data.zone, availability: data.availability, busy: data.busy }), time_zone: data.zone });
+  });
+
+  /** Where events come from. Google Calendar is not available yet; .ics import stands in for it. */
+  router.get("/providers", async (_req, res) => {
+    const userId = currentAuth(res.locals).user.id;
+    const imported = await db.calendarSource.count({ where: { userId } });
+    res.json([
+      { provider: "manual", status: "active", read_only: false },
+      { provider: "ics", status: imported > 0 ? "active" : "not_configured", read_only: true },
+      { provider: "google", status: "coming_soon", read_only: true },
+    ]);
   });
 
   router.post("/events", async (req, res) => {
     const userId = currentAuth(res.locals).user.id;
     const body = eventCreation.parse(req.body ?? {});
+    const settings = await getSettings(db, userId);
+    checkZone(body.time_zone);
     const allDay = body.all_day ?? false;
-    const times = eventTimes(allDay, body.start, body.end);
+    const times = eventTimes(allDay, body.start, body.end, body.time_zone || settings.timeZone);
+    const recurrenceRule = checkRule(body.recurrence_rule);
+    await checkCourse(userId, body.course_id);
     const event = await db.calendarEvent.create({
       data: {
         userId,
         title: body.title,
         location: body.location || null,
+        description: body.description || null,
         allDay,
         busy: body.busy ?? !allDay,
+        timeZone: body.time_zone || null,
+        eventType: body.event_type ?? "other",
+        courseId: body.course_id ?? null,
+        recurrenceRule,
         ...times,
       },
       include: eventInclude,
@@ -133,23 +232,34 @@ export function calendarRouter(db: Db): Router {
     res.status(201).json(presentEvent(event));
   });
 
+  /** Changes an event added by hand; for a recurring event this changes the whole series. */
   router.patch("/events/:id", async (req, res) => {
     const userId = currentAuth(res.locals).user.id;
     const body = eventChanges.parse(req.body ?? {});
     const event = await findEvent(userId, req.params.id);
     requireManual(event);
+    const settings = await getSettings(db, userId);
+    checkZone(body.time_zone);
+    const zone = (body.time_zone !== undefined ? body.time_zone : event.timeZone) || settings.timeZone;
     const current = presentEvent(event);
     const allDay = body.all_day ?? event.allDay;
     const times =
       body.all_day !== undefined || body.start !== undefined || body.end !== undefined
-        ? eventTimes(allDay, body.start ?? current.start, body.end ?? current.end)
+        ? eventTimes(allDay, body.start ?? current.start, body.end ?? current.end, zone)
         : {};
+    const recurrenceRule = body.recurrence_rule !== undefined ? checkRule(body.recurrence_rule) : undefined;
+    await checkCourse(userId, body.course_id);
     const updated = await db.calendarEvent.update({
       where: { id: event.id },
       data: {
         ...(body.title !== undefined && { title: body.title }),
         ...(body.location !== undefined && { location: body.location || null }),
+        ...(body.description !== undefined && { description: body.description || null }),
         ...(body.busy !== undefined && { busy: body.busy }),
+        ...(body.time_zone !== undefined && { timeZone: body.time_zone || null }),
+        ...(body.event_type !== undefined && { eventType: body.event_type }),
+        ...(body.course_id !== undefined && { courseId: body.course_id }),
+        ...(recurrenceRule !== undefined && { recurrenceRule }),
         allDay,
         ...times,
       },
@@ -158,6 +268,7 @@ export function calendarRouter(db: Db): Router {
     res.json(presentEvent(updated));
   });
 
+  /** Deletes an event added by hand; a recurring event goes with its whole series. */
   router.delete("/events/:id", async (req, res) => {
     const userId = currentAuth(res.locals).user.id;
     const event = await findEvent(userId, req.params.id);
@@ -166,65 +277,5 @@ export function calendarRouter(db: Db): Router {
     res.status(204).end();
   });
 
-  router.get("/sources", async (_req, res) => {
-    const userId = currentAuth(res.locals).user.id;
-    const sources = await db.calendarSource.findMany({
-      where: { userId },
-      include: { _count: { select: { events: true } } },
-      orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-    });
-    res.json(sources.map((source) => presentSource(source, source._count.events)));
-  });
-
-  /** Imports an .ics file. Its own larger body limit is applied here, after sign-in is checked. */
-  router.post("/sources", express.json({ limit: ICS_BODY_LIMIT }), async (req, res) => {
-    const userId = currentAuth(res.locals).user.id;
-    const body = sourceCreation.parse(req.body ?? {});
-    if ((await db.calendarSource.count({ where: { userId } })) >= MAX_SOURCES) {
-      throw new HttpError(409, "TOO_MANY_CALENDARS", `You can import up to ${MAX_SOURCES} calendars. Remove one first.`);
-    }
-    const settings = await getSettings(db, userId);
-    const now = Date.now();
-    let parsed;
-    try {
-      parsed = parseIcs(body.ics, {
-        timeZone: settings.timeZone,
-        windowStart: new Date(now - IMPORT_PAST_DAYS * DAY_MS),
-        windowEnd: new Date(now + IMPORT_FUTURE_DAYS * DAY_MS),
-      });
-    } catch (error) {
-      if (error instanceof IcsError) throw new FieldError("ics", error.message);
-      throw error;
-    }
-    if (!parsed.events.length) {
-      throw new FieldError("ics", "This file has no events between last month and a year from now.");
-    }
-    const fileStem = body.file_name?.replace(/\.ics$/i, "").trim();
-    const name = body.name || parsed.name || fileStem || "Imported calendar";
-    const source = await db.$transaction(async (tx) => {
-      const created = await tx.calendarSource.create({
-        data: { userId, name: name.slice(0, 100), fileName: body.file_name || null },
-      });
-      await tx.calendarEvent.createMany({
-        data: parsed.events.map((event) => ({ userId, sourceId: created.id, ...event })),
-      });
-      return created;
-    });
-    res.status(201).json({ ...presentSource(source, parsed.events.length), truncated: parsed.truncated });
-  });
-
-  router.delete("/sources/:id", async (req, res) => {
-    const userId = currentAuth(res.locals).user.id;
-    const id = idParam(req.params.id, sourceNotFound());
-    const { count } = await db.calendarSource.deleteMany({ where: { id, userId } });
-    if (!count) throw sourceNotFound();
-    res.status(204).end();
-  });
-
   return router;
-}
-
-/** True for the one request whose body may exceed the global JSON limit. */
-export function isIcsUpload(method: string, path: string): boolean {
-  return method === "POST" && path === "/api/calendar/sources";
 }

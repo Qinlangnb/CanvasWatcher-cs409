@@ -10,6 +10,7 @@
 // finish, or the student started it today ahead of the plan. Today's study capacity is then handed
 // out in score order; capacity left over goes to the next tasks due within two weeks ("get ahead").
 import { DateTime } from "luxon";
+import { type Availability, type CapacitySource, availabilityOn } from "../calendar/capacity.js";
 import type { PlanSettings } from "../routes/settings.js";
 import { remainingMinutes } from "../tasks/effort.js";
 
@@ -46,6 +47,11 @@ export interface PlanInput {
   tasks: PlanTask[];
   /** Busy calendar time from the start of today to at least the planning horizon. */
   busy: Interval[];
+  /**
+   * Weekly study availability and date overrides. A day they configure is planned inside its
+   * intervals, without the daily goal cap; other days use the study window and the daily goal.
+   */
+  availability?: Availability | null;
 }
 
 export interface PlanItem {
@@ -65,6 +71,10 @@ export interface Plan {
   dayStart: Date;
   dayEnd: Date;
   studyWindow: Interval;
+  /** Today's study intervals: the availability for today, or the single study window. */
+  studyWindows: Interval[];
+  /** availability: today follows the weekly availability; calendar: and busy events cut into it; fallback: study window and daily goal. */
+  capacitySource: CapacitySource;
   goalMinutes: number;
   /** Study-window minutes still free today: after now, outside busy events. */
   freeMinutes: number;
@@ -84,6 +94,17 @@ const clamp = (value: number) => Math.min(1, Math.max(0, value));
 function atMinute(day: DateTime, minute: number): DateTime {
   if (minute >= DAY_MINUTES) return day.plus({ days: 1 }).startOf("day");
   return day.set({ hour: Math.floor(minute / 60), minute: minute % 60, second: 0, millisecond: 0 });
+}
+
+/** A day's study intervals and how much of them the plan may use. */
+function studyDay(day: DateTime, settings: PlanSettings, availability: Availability | null | undefined): { spans: Span[]; cap: number; configured: boolean } {
+  const windows = availabilityOn(availability ?? null, day);
+  if (windows) return { spans: windows.map((span): Span => [span.start, span.end]), cap: Number.POSITIVE_INFINITY, configured: true };
+  return {
+    spans: [[atMinute(day, settings.studyStartMinute).toMillis(), atMinute(day, settings.studyEndMinute).toMillis()]],
+    cap: settings.dailyStudyMinutes,
+    configured: false,
+  };
 }
 
 function merge(intervals: Interval[]): Span[] {
@@ -121,7 +142,7 @@ function minutesBefore(spans: Span[], limit: number): number {
   return total / MINUTE;
 }
 
-export function buildPlan({ now, settings, tasks, busy }: PlanInput): Plan {
+export function buildPlan({ now, settings, tasks, busy, availability }: PlanInput): Plan {
   const nowMs = now.getTime();
   const today = DateTime.fromJSDate(now, { zone: settings.timeZone }).startOf("day");
   const todayDate = today.toISODate() as string;
@@ -132,25 +153,45 @@ export function buildPlan({ now, settings, tasks, busy }: PlanInput): Plan {
   // Free study time for each of the next HORIZON_DAYS days, starting now.
   const days = Array.from({ length: HORIZON_DAYS }, (_, index) => {
     const day = today.plus({ days: index });
-    const start = Math.max(nowMs, atMinute(day, settings.studyStartMinute).toMillis());
-    const end = atMinute(day, settings.studyEndMinute).toMillis();
-    return { start, free: end > start ? freeSpans(start, end, busySpans) : [] };
+    const study = studyDay(day, settings, availability);
+    const free = study.spans.flatMap(([spanStart, end]) => {
+      const start = Math.max(nowMs, spanStart);
+      return end > start ? freeSpans(start, end, busySpans) : [];
+    });
+    return { start: Math.max(nowMs, study.spans[0]?.[0] ?? day.toMillis()), free, cap: study.cap, study };
   });
   const horizonEnd = today.plus({ days: HORIZON_DAYS }).toMillis();
+  const noAvailability = !availability || (availability.rules.length === 0 && availability.overrides.size === 0);
 
-  /** Study minutes available from now until `deadline`, each day capped at the daily goal. */
+  /** Study minutes available from now until `deadline`; days without availability are capped at the daily goal. */
   const availableUntil = (deadline: number): number => {
     let total = 0;
     for (const day of days) {
       if (day.start >= deadline) break;
-      total += Math.min(daily, minutesBefore(day.free, deadline));
+      total += Math.min(day.cap, minutesBefore(day.free, deadline));
     }
-    if (deadline > horizonEnd) total += Math.floor((deadline - horizonEnd) / (DAY_MINUTES * MINUTE)) * daily;
+    if (deadline <= horizonEnd) return total;
+    // Past the horizon events aren't loaded: count the daily goal, or each day's availability.
+    if (noAvailability) return total + Math.floor((deadline - horizonEnd) / (DAY_MINUTES * MINUTE)) * daily;
+    for (let index = HORIZON_DAYS; index < 366; index++) {
+      const day = today.plus({ days: index });
+      if (day.plus({ days: 1 }).toMillis() > deadline) break;
+      const study = studyDay(day, settings, availability);
+      total += Math.min(study.cap, minutesBefore(study.spans, Number.POSITIVE_INFINITY));
+    }
     return total;
   };
 
-  const freeMinutes = Math.round(minutesBefore(days[0]?.free ?? [], Number.POSITIVE_INFINITY));
-  const capacityMinutes = Math.min(daily, freeMinutes);
+  const first = days[0];
+  const freeMinutes = Math.round(minutesBefore(first?.free ?? [], Number.POSITIVE_INFINITY));
+  const configuredToday = first?.study.configured ?? false;
+  const capacityMinutes = configuredToday ? freeMinutes : Math.min(daily, freeMinutes);
+  const todaySpans = first?.study.spans ?? [];
+  const windowMinutes = minutesBefore(
+    todaySpans.map(([start, end]): Span => [Math.max(start, nowMs), end]).filter(([start, end]) => end > start),
+    Number.POSITIVE_INFINITY,
+  );
+  const capacitySource: CapacitySource = !configuredToday ? "fallback" : Math.round(windowMinutes) > freeMinutes ? "calendar" : "availability";
   const lookback = nowMs - OVERDUE_LOOKBACK_DAYS * DAY_MINUTES * MINUTE;
   const aheadLimit = nowMs + HORIZON_DAYS * DAY_MINUTES * MINUTE;
 
@@ -217,10 +258,17 @@ export function buildPlan({ now, settings, tasks, busy }: PlanInput): Plan {
     date: todayDate,
     dayStart: today.toJSDate(),
     dayEnd: dayEnd.toJSDate(),
-    studyWindow: {
-      start: atMinute(today, settings.studyStartMinute).toJSDate(),
-      end: atMinute(today, settings.studyEndMinute).toJSDate(),
-    },
+    studyWindow: configuredToday
+      ? {
+          start: new Date(todaySpans[0]?.[0] ?? today.toMillis()),
+          end: new Date(todaySpans.at(-1)?.[1] ?? today.toMillis()),
+        }
+      : {
+          start: atMinute(today, settings.studyStartMinute).toJSDate(),
+          end: atMinute(today, settings.studyEndMinute).toJSDate(),
+        },
+    studyWindows: todaySpans.map(([start, end]) => ({ start: new Date(start), end: new Date(end) })),
+    capacitySource,
     goalMinutes: daily,
     freeMinutes,
     capacityMinutes,

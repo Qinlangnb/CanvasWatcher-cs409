@@ -75,6 +75,8 @@ export function presentCourse(course: Course, counts: CourseCounts) {
     html_url: course.htmlUrl,
     archived: course.archivedAt !== null,
     last_seen_at: iso(course.lastSeenAt),
+    /** Busy travel time before and after this course's class events. */
+    commute_minutes: course.commuteMinutes,
     counts,
   };
 }

@@ -70,6 +70,8 @@ export async function resetPreview(db: Db, userId: string, template: User): Prom
       await tx.syncRun.deleteMany({ where: { userId } });
       await tx.calendarSource.deleteMany({ where: { userId } });
       await tx.calendarEvent.deleteMany({ where: { userId } });
+      await tx.studyAvailabilityRule.deleteMany({ where: { userId } });
+      await tx.studyAvailabilityOverride.deleteMany({ where: { userId } });
       await tx.canvasConnection.deleteMany({ where: { userId } });
       await tx.userSettings.deleteMany({ where: { userId } });
       await copyAccount(tx, template, userId);
@@ -282,8 +284,17 @@ async function copyAccount(tx: Prisma.TransactionClient, template: User, userId:
       ...event,
       userId,
       sourceId: event.sourceId === null ? null : (sourceIds.get(event.sourceId) ?? null),
+      // A link must point at the copy's course, never the template's.
+      courseId: event.courseId === null ? null : (courseIds.get(event.courseId) ?? null),
       title: scrub.text(event.title),
       location: scrub.optional(event.location),
+      description: scrub.optional(event.description),
     })),
+  });
+  const rules = await tx.studyAvailabilityRule.findMany({ where: { userId: from }, orderBy: { id: "asc" } });
+  await tx.studyAvailabilityRule.createMany({ data: rules.map(({ id: _id, userId: _owner, ...rule }) => ({ ...rule, userId })) });
+  const overrides = await tx.studyAvailabilityOverride.findMany({ where: { userId: from }, orderBy: { id: "asc" } });
+  await tx.studyAvailabilityOverride.createMany({
+    data: overrides.map(({ id: _id, userId: _owner, intervals, ...override }) => ({ ...override, userId, intervals: intervals as Prisma.InputJsonValue })),
   });
 }

@@ -1,19 +1,22 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router";
+import { type CalendarFilters, type CalendarLayer, type CalendarWarning, calendarOf, readFilters, useCalendarView, writeFilters } from "../calendarApi";
+import { addMonths, dayLabel, minutesOnDay, monthGrid, monthLabel, placeEvents, sameMonth, slotValue } from "../calendarGrid";
 import { EventDialog, ImportCalendarDialog } from "../events";
 import { formatMinutes, formatTime } from "../format";
-import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon, ClipboardIcon, PlusIcon, UploadIcon } from "../icons";
+import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon, ClipboardIcon, LockIcon, PlusIcon, UploadIcon } from "../icons";
 import { TaskList } from "../lists";
-import { useEvents, usePlanZone, useSettings, useTasks } from "../queries";
+import { useCalendarSources, usePlanZone, useSettings, useTasks } from "../queries";
 import { useNow } from "../shell";
 import { useTaskEditor } from "../tasks";
 import type { CalendarEvent, Task } from "../types";
-import { Badge, EmptyState, PageHeader, QueryError, SkeletonList } from "../ui";
+import { Alert, Badge, EmptyState, PageHeader, QueryError, SkeletonList } from "../ui";
 import {
   addDays,
   buildTimeline,
   dateLabel,
   eventDates,
+  eventOrder,
   eventTimeLabel,
   groupByDate,
   localDate,
@@ -24,26 +27,76 @@ import {
   type TimelineDay,
 } from "../zoned";
 
-type View = "week" | "timeline";
+type View = "day" | "week" | "month" | "timeline";
+const VIEWS: View[] = ["day", "week", "month", "timeline"];
 const TIMELINE_DAYS = 28;
+/** Pixels per hour on the day grid. */
+const HOUR_PX = 48;
+/** Events shown per month cell before "+N more". */
+const MONTH_ITEMS = 3;
 
 const isDate = (value: string | null): value is string => value !== null && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));
 
 type DayItem = { kind: "event"; at: number; event: CalendarEvent } | { kind: "task"; at: number; task: Task };
 
-function WeekView({ dates, today, zone, onEvent }: { dates: string[]; today: string; zone: string; onEvent: (event: CalendarEvent) => void }) {
-  const range = rangeOf(dates[0] ?? today, dates.at(-1) ?? today, zone);
-  const events = useEvents(range.from, range.to);
-  const tasks = useTasks({ status: "all", dueAfter: range.from, dueBefore: range.to });
+/** A slot chosen on the day grid, or a day, to start a new event from. */
+type NewEvent = { date: string; slot?: { start: string; end: string } };
+
+function EventButton({ event, date, zone, onEvent, compact = false }: { event: CalendarEvent; date: string; zone: string; onEvent: (event: CalendarEvent) => void; compact?: boolean }) {
+  return (
+    <button
+      type="button"
+      className={`cal-item cal-event type-${event.event_type}${event.busy ? "" : " free"}${event.editable ? "" : " read-only"}`}
+      onClick={() => onEvent(event)}
+    >
+      <span className="cal-time">
+        {event.editable ? null : <LockIcon size={12} aria-hidden="true" />}
+        {eventTimeLabel(event, date, zone)}
+        {event.editable ? "" : <span className="visually-hidden"> (read-only)</span>}
+      </span>
+      <span className="cal-title">{event.title}</span>
+      {!compact && event.location ? <span className="cal-detail">{event.location}</span> : null}
+    </button>
+  );
+}
+
+function TaskButton({ task, zone, onTask }: { task: Task; zone: string; onTask: (task: Task) => void }) {
+  return (
+    <button type="button" className={`cal-item cal-task type-${task.type} state-${task.state}`} onClick={() => onTask(task)}>
+      <span className="cal-time">
+        Due {formatTime(new Date(task.due_at ?? ""), zone)}
+        {task.state === "done" ? " · done" : task.state === "ignored" ? " · ignored" : ""}
+      </span>
+      <span className="cal-title">{task.title}</span>
+      <span className="cal-detail">{task.course.code}</span>
+    </button>
+  );
+}
+
+function useDueTasks(from: string, to: string) {
+  return useTasks({ status: "all", dueAfter: from, dueBefore: to });
+}
+
+const datedTasks = (tasks: Task[]) => tasks.filter((task) => task.due_at && task.state !== "removed");
+
+function WeekView({
+  dates,
+  today,
+  zone,
+  events,
+  tasks,
+  onEvent,
+}: {
+  dates: string[];
+  today: string;
+  zone: string;
+  events: CalendarEvent[];
+  tasks: Task[];
+  onEvent: (event: CalendarEvent) => void;
+}) {
   const editor = useTaskEditor();
-
-  if (events.isPending || tasks.isPending) return <SkeletonList rows={5} label="Loading this week" />;
-  if (events.isError) return <QueryError title="Your events didn't load" error={events.error} retry={() => void events.refetch()} />;
-  if (tasks.isError) return <QueryError title="Due dates didn't load" error={tasks.error} retry={() => void tasks.refetch()} />;
-
-  const eventsByDate = groupByDate(dates, events.data, (event) => eventDates(event, zone));
-  const dated = tasks.data.filter((task) => task.due_at && task.state !== "removed");
-  const tasksByDate = groupByDate(dates, dated, (task) => [localDate(task.due_at ?? "", zone)]);
+  const eventsByDate = groupByDate(dates, events, (event) => eventDates(event, zone));
+  const tasksByDate = groupByDate(dates, datedTasks(tasks), (task) => [localDate(task.due_at ?? "", zone)]);
 
   return (
     <div className="week-grid">
@@ -71,27 +124,12 @@ function WeekView({ dates, today, zone, onEvent }: { dates: string[]; today: str
               <ul className="day-items">
                 {items.map((item) =>
                   item.kind === "event" ? (
-                    <li key={`e${item.event.id}`}>
-                      <button type="button" className={`cal-item cal-event${item.event.busy ? "" : " free"}`} onClick={() => onEvent(item.event)}>
-                        <span className="cal-time">{eventTimeLabel(item.event, date, zone)}</span>
-                        <span className="cal-title">{item.event.title}</span>
-                        {item.event.location ? <span className="cal-detail">{item.event.location}</span> : null}
-                      </button>
+                    <li key={`e${item.event.key}`}>
+                      <EventButton event={item.event} date={date} zone={zone} onEvent={onEvent} />
                     </li>
                   ) : (
                     <li key={`t${item.task.id}`}>
-                      <button
-                        type="button"
-                        className={`cal-item cal-task type-${item.task.type} state-${item.task.state}`}
-                        onClick={() => editor.open(item.task)}
-                      >
-                        <span className="cal-time">
-                          Due {formatTime(new Date(item.task.due_at ?? ""), zone)}
-                          {item.task.state === "done" ? " · done" : item.task.state === "ignored" ? " · ignored" : ""}
-                        </span>
-                        <span className="cal-title">{item.task.title}</span>
-                        <span className="cal-detail">{item.task.course.code}</span>
-                      </button>
+                      <TaskButton task={item.task} zone={zone} onTask={(task) => editor.open(task)} />
                     </li>
                   ),
                 )}
@@ -100,6 +138,198 @@ function WeekView({ dates, today, zone, onEvent }: { dates: string[]; today: str
           </section>
         );
       })}
+    </div>
+  );
+}
+
+const LAYER_LABELS: Record<CalendarLayer["kind"], string> = {
+  availability: "Study window",
+  commute: "Commute",
+  short_gap: "Short class gap",
+};
+
+/**
+ * One day as a time grid: background layers, events placed by time in side-by-side lanes, and a
+ * button per hour to add an event there (the keyboard way to select a slot).
+ */
+function DayView({
+  date,
+  today,
+  zone,
+  events,
+  tasks,
+  layers,
+  onEvent,
+  onCreate,
+}: {
+  date: string;
+  today: string;
+  zone: string;
+  events: CalendarEvent[];
+  tasks: Task[];
+  layers: CalendarLayer[];
+  onEvent: (event: CalendarEvent) => void;
+  onCreate: (create: NewEvent) => void;
+}) {
+  const editor = useTaskEditor();
+  const onDay = events.filter((event) => eventDates(event, zone).includes(date));
+  const allDay = onDay.filter((event) => event.all_day).sort(eventOrder);
+  const placed = placeEvents(onDay, date, zone);
+  const due = datedTasks(tasks).filter((task) => localDate(task.due_at ?? "", zone) === date);
+  const bands = layers.flatMap((layer) => {
+    const span = minutesOnDay(layer.start, layer.end, date, zone);
+    return span ? [{ layer, ...span }] : [];
+  });
+  const dayStart = Date.parse(rangeOf(date, date, zone).from);
+  const nowMinute = date === today ? (Date.now() - dayStart) / 60_000 : null;
+  const hours = Array.from({ length: 24 }, (_, hour) => hour);
+
+  return (
+    <div className="day-view">
+      {allDay.length || due.length ? (
+        <ul className="day-view-top" aria-label="All day and due">
+          {allDay.map((event) => (
+            <li key={event.key}>
+              <EventButton event={event} date={date} zone={zone} onEvent={onEvent} compact />
+            </li>
+          ))}
+          {due.map((task) => (
+            <li key={`t${task.id}`}>
+              <TaskButton task={task} zone={zone} onTask={(chosen) => editor.open(chosen)} />
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <div className="time-grid" style={{ height: `${24 * HOUR_PX}px` }}>
+        <ol className="time-slots">
+          {hours.map((hour) => {
+            const label = formatTime(new Date(dayStart + hour * 3_600_000), zone);
+            return (
+              <li key={hour} style={{ height: `${HOUR_PX}px` }}>
+                <span className="time-label" aria-hidden="true">
+                  {label}
+                </span>
+                <button
+                  type="button"
+                  className="time-slot"
+                  onClick={() => onCreate({ date, slot: { start: slotValue(date, hour * 60), end: slotValue(date, hour * 60 + 60) } })}
+                >
+                  <span className="visually-hidden">Add an event at {label}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+        <div className="time-layers" aria-hidden="true">
+          {bands.map(({ layer, top, bottom }, index) => (
+            <span
+              key={`${layer.kind}-${index}`}
+              className={`time-layer layer-${layer.kind}`}
+              style={{ top: `${(top / 60) * HOUR_PX}px`, height: `${((bottom - top) / 60) * HOUR_PX}px` }}
+              title={LAYER_LABELS[layer.kind]}
+            />
+          ))}
+        </div>
+        <ul className="time-events">
+          {placed.map((item) => (
+            <li
+              key={item.event.key}
+              style={{
+                top: `${(item.top / 60) * HOUR_PX}px`,
+                height: `${Math.max(20, ((item.bottom - item.top) / 60) * HOUR_PX)}px`,
+                left: `calc(${(item.lane / item.lanes) * 100}% + 2px)`,
+                width: `calc(${100 / item.lanes}% - 4px)`,
+              }}
+            >
+              <EventButton event={item.event} date={date} zone={zone} onEvent={onEvent} compact />
+            </li>
+          ))}
+        </ul>
+        {nowMinute !== null && nowMinute >= 0 && nowMinute < 1440 ? (
+          <span className="time-now" style={{ top: `${(nowMinute / 60) * HOUR_PX}px` }} aria-hidden="true" />
+        ) : null}
+      </div>
+      {bands.length ? (
+        <p className="layer-legend muted">
+          {(["availability", "commute", "short_gap"] as const)
+            .filter((kind) => bands.some((band) => band.layer.kind === kind))
+            .map((kind) => (
+              <span key={kind} className={`legend-item layer-${kind}`}>
+                {LAYER_LABELS[kind]}
+              </span>
+            ))}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function MonthView({
+  anchor,
+  today,
+  zone,
+  events,
+  tasks,
+  onEvent,
+  onDay,
+}: {
+  anchor: string;
+  today: string;
+  zone: string;
+  events: CalendarEvent[];
+  tasks: Task[];
+  onEvent: (event: CalendarEvent) => void;
+  onDay: (date: string) => void;
+}) {
+  const editor = useTaskEditor();
+  const dates = monthGrid(anchor);
+  const eventsByDate = groupByDate(dates, [...events].sort(eventOrder), (event) => eventDates(event, zone));
+  const tasksByDate = groupByDate(dates, datedTasks(tasks), (task) => [localDate(task.due_at ?? "", zone)]);
+  const weekdays = dates.slice(0, 7).map((date) => weekdayLabel(date).weekday);
+
+  return (
+    <div className="month-view">
+      <div className="month-weekdays" aria-hidden="true">
+        {weekdays.map((weekday) => (
+          <span key={weekday}>{weekday}</span>
+        ))}
+      </div>
+      <ol className="month-grid">
+        {dates.map((date) => {
+          const dayEvents = eventsByDate.get(date) ?? [];
+          const dayTasks = tasksByDate.get(date) ?? [];
+          const shown = dayEvents.slice(0, MONTH_ITEMS);
+          const more = dayEvents.length - shown.length + dayTasks.length;
+          const label = weekdayLabel(date);
+          return (
+            <li
+              key={date}
+              className={`month-cell${sameMonth(date, anchor) ? "" : " outside"}${date === today ? " today" : ""}${dayEvents.length + dayTasks.length ? "" : " empty"}`}
+            >
+              <button type="button" className="month-day" onClick={() => onDay(date)} aria-label={`${label.full}${date === today ? " (today)" : ""}: open day`}>
+                {label.day}
+              </button>
+              <ul className="month-items">
+                {shown.map((event) => (
+                  <li key={event.key}>
+                    <EventButton event={event} date={date} zone={zone} onEvent={onEvent} compact />
+                  </li>
+                ))}
+                {dayTasks.length === 1 && dayEvents.length < MONTH_ITEMS ? (
+                  <li>
+                    <TaskButton task={dayTasks[0] as Task} zone={zone} onTask={(task) => editor.open(task)} />
+                  </li>
+                ) : null}
+              </ul>
+              {more > (dayTasks.length === 1 && dayEvents.length < MONTH_ITEMS ? 1 : 0) ? (
+                <button type="button" className="link-button month-more" onClick={() => onDay(date)}>
+                  +{more - (dayTasks.length === 1 && dayEvents.length < MONTH_ITEMS ? 1 : 0)} more
+                </button>
+              ) : null}
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }
@@ -202,17 +432,137 @@ function TimelineView({ today, zone, now }: { today: string; zone: string; now: 
   );
 }
 
+/** Calendars and background layers to show; display only, saved in this browser. */
+function DisplayFilters({ filters, onChange }: { filters: CalendarFilters; onChange: (filters: CalendarFilters) => void }) {
+  const sources = useCalendarSources();
+  const calendars = [{ id: "manual", name: "Added by hand" }, ...(sources.data ?? []).map((source) => ({ id: `ics:${source.id}`, name: `ICS · ${source.name}` }))];
+  const toggle = (id: string, shown: boolean) =>
+    onChange({ ...filters, hidden: shown ? filters.hidden.filter((item) => item !== id) : [...new Set([...filters.hidden, id])] });
+  const hiddenCount = filters.hidden.length + (filters.layers ? 0 : 1);
+  return (
+    <details className="calendar-filters">
+      <summary>
+        Display filters{hiddenCount ? <span className="count">{hiddenCount} hidden</span> : null}
+      </summary>
+      <fieldset>
+        <legend className="visually-hidden">Calendars and layers to show</legend>
+        {calendars.map((calendar) => (
+          <label key={calendar.id} className="check-field">
+            <input type="checkbox" checked={!filters.hidden.includes(calendar.id)} onChange={(event) => toggle(calendar.id, event.target.checked)} />
+            <span>{calendar.name}</span>
+          </label>
+        ))}
+        <label className="check-field">
+          <input type="checkbox" checked={filters.layers} onChange={(event) => onChange({ ...filters, layers: event.target.checked })} />
+          <span>Study windows, commute and short class gaps</span>
+        </label>
+      </fieldset>
+      <p className="muted">Display only. Hidden events still affect study capacity.</p>
+    </details>
+  );
+}
+
+function Warnings({ warnings, onRepair }: { warnings: CalendarWarning[]; onRepair: (event: CalendarEvent) => void }) {
+  if (!warnings.length) return null;
+  return (
+    <div className="stack">
+      {warnings.map((warning) => (
+        <Alert
+          key={`${warning.code}-${warning.event.id}`}
+          tone="warning"
+          title={`${warning.event.title}: ${warning.code === "unsupported_timezone" ? "time zone" : "repeat rule"} needs repair`}
+          action={
+            warning.event.editable ? (
+              <button type="button" className="button small secondary" onClick={() => onRepair(warning.event)}>
+                Repair event
+              </button>
+            ) : undefined
+          }
+        >
+          {warning.message}
+        </Alert>
+      ))}
+    </div>
+  );
+}
+
+/** The dates a view shows. */
+function datesOf(view: View, anchor: string): string[] {
+  if (view === "day") return [anchor];
+  if (view === "month") return monthGrid(anchor);
+  return weekOf(anchor);
+}
+
+function viewLabel(view: View, anchor: string, dates: string[]): string {
+  if (view === "day") return dayLabel(anchor);
+  if (view === "month") return monthLabel(anchor);
+  return weekRangeLabel(dates);
+}
+
+const STEP_LABELS: Record<Exclude<View, "timeline">, [string, string, string]> = {
+  day: ["Previous day", "Today", "Next day"],
+  week: ["Previous week", "This week", "Next week"],
+  month: ["Previous month", "This month", "Next month"],
+};
+
+/** The day, week or month views: one request for events, layers and warnings, then filtered for display. */
+function CalendarRange({
+  view,
+  anchor,
+  today,
+  zone,
+  filters,
+  onEvent,
+  onCreate,
+  onDay,
+}: {
+  view: Exclude<View, "timeline">;
+  anchor: string;
+  today: string;
+  zone: string;
+  filters: CalendarFilters;
+  onEvent: (event: CalendarEvent, edit?: boolean) => void;
+  onCreate: (create: NewEvent) => void;
+  onDay: (date: string) => void;
+}) {
+  const dates = datesOf(view, anchor);
+  const range = rangeOf(dates[0] ?? today, dates.at(-1) ?? today, zone);
+  const calendar = useCalendarView(range.from, range.to);
+  const tasks = useDueTasks(range.from, range.to);
+
+  if (calendar.isPending || tasks.isPending) return <SkeletonList rows={5} label="Loading your calendar" />;
+  if (calendar.isError) return <QueryError title="Your events didn't load" error={calendar.error} retry={() => void calendar.refetch()} />;
+  if (tasks.isError) return <QueryError title="Due dates didn't load" error={tasks.error} retry={() => void tasks.refetch()} />;
+
+  const events = calendar.data.events.filter((event) => !filters.hidden.includes(calendarOf(event)));
+  const layers = filters.layers ? calendar.data.layers : [];
+  return (
+    <>
+      <Warnings warnings={calendar.data.warnings} onRepair={(event) => onEvent(event, true)} />
+      {view === "day" ? (
+        <DayView date={anchor} today={today} zone={zone} events={events} tasks={tasks.data} layers={layers} onEvent={onEvent} onCreate={onCreate} />
+      ) : view === "month" ? (
+        <MonthView anchor={anchor} today={today} zone={zone} events={events} tasks={tasks.data} onEvent={onEvent} onDay={onDay} />
+      ) : (
+        <WeekView dates={dates} today={today} zone={zone} events={events} tasks={tasks.data} onEvent={onEvent} />
+      )}
+    </>
+  );
+}
+
 export function CalendarPage() {
   const zone = usePlanZone();
   const now = useNow();
   const today = localDate(now, zone);
   const [search, setSearch] = useSearchParams();
-  const view: View = search.get("view") === "timeline" ? "timeline" : "week";
+  const requested = search.get("view") as View | null;
+  const view: View = requested && VIEWS.includes(requested) ? requested : "week";
   const anchor = isDate(search.get("date")) ? (search.get("date") as string) : today;
-  const dates = weekOf(anchor);
-  const thisWeek = dates.includes(today);
-  const [dialog, setDialog] = useState<{ key: number; open: boolean; event?: CalendarEvent; date: string } | null>(null);
+  const dates = datesOf(view, anchor);
+  const showsToday = view === "month" ? sameMonth(anchor, today) : dates.includes(today);
+  const [dialog, setDialog] = useState<{ key: number; open: boolean; event?: CalendarEvent; date: string; slot?: NewEvent["slot"]; edit?: boolean } | null>(null);
   const [importing, setImporting] = useState(false);
+  const [filters, setFilters] = useState(readFilters);
 
   const go = (params: { view?: View; date?: string }) => {
     const next = new URLSearchParams(search);
@@ -226,8 +576,18 @@ export function CalendarPage() {
     }
     setSearch(next, { replace: true });
   };
-  const openEvent = (event?: CalendarEvent) =>
-    setDialog({ key: Date.now(), open: true, event, date: thisWeek ? today : (dates[0] ?? today) });
+  const step = (direction: 1 | -1) => {
+    if (view === "day") go({ date: addDays(anchor, direction) });
+    else if (view === "month") go({ date: addMonths(anchor, direction) });
+    else go({ date: addDays(anchor, 7 * direction) });
+  };
+  const openEvent = (event?: CalendarEvent, edit = false) =>
+    setDialog({ key: Date.now(), open: true, event, edit, date: showsToday ? today : (view === "day" ? anchor : (dates[0] ?? today)) });
+  const create = ({ date, slot }: NewEvent) => setDialog({ key: Date.now(), open: true, date, slot });
+  const changeFilters = (next: CalendarFilters) => {
+    setFilters(next);
+    writeFilters(next);
+  };
 
   return (
     <div className="page">
@@ -250,37 +610,57 @@ export function CalendarPage() {
 
       <div className="calendar-toolbar">
         <div className="segmented" role="group" aria-label="View">
+          <button type="button" aria-pressed={view === "day"} onClick={() => go({ view: "day" })}>
+            Day
+          </button>
           <button type="button" aria-pressed={view === "week"} onClick={() => go({ view: "week" })}>
             <CalendarIcon size={16} />
             Week
+          </button>
+          <button type="button" aria-pressed={view === "month"} onClick={() => go({ view: "month" })}>
+            Month
           </button>
           <button type="button" aria-pressed={view === "timeline"} onClick={() => go({ view: "timeline" })}>
             <ClipboardIcon size={16} />
             Timeline
           </button>
         </div>
-        {view === "week" ? (
+        {view !== "timeline" ? (
           <div className="week-nav">
-            <button type="button" className="icon-button" aria-label="Previous week" onClick={() => go({ date: addDays(anchor, -7) })}>
+            <button type="button" className="icon-button" aria-label={STEP_LABELS[view][0]} onClick={() => step(-1)}>
               <ChevronLeftIcon />
             </button>
-            <button type="button" className="button small secondary" disabled={thisWeek} onClick={() => go({ date: today })}>
-              This week
+            <button type="button" className="button small secondary" disabled={showsToday && (view !== "day" || anchor === today)} onClick={() => go({ date: today })}>
+              {STEP_LABELS[view][1]}
             </button>
-            <button type="button" className="icon-button" aria-label="Next week" onClick={() => go({ date: addDays(anchor, 7) })}>
+            <button type="button" className="icon-button" aria-label={STEP_LABELS[view][2]} onClick={() => step(1)}>
               <ChevronRightIcon />
             </button>
             <p className="week-label" aria-live="polite">
-              {weekRangeLabel(dates)}
+              {viewLabel(view, anchor, dates)}
             </p>
+            <label className="go-to-date">
+              <span>Go to date</span>
+              <input type="date" value={anchor} onChange={(event) => isDate(event.target.value) && go({ date: event.target.value })} />
+            </label>
           </div>
         ) : null}
       </div>
+      {view !== "timeline" ? <DisplayFilters filters={filters} onChange={changeFilters} /> : null}
 
-      {view === "week" ? (
-        <WeekView dates={dates} today={today} zone={zone} onEvent={openEvent} />
-      ) : (
+      {view === "timeline" ? (
         <TimelineView today={today} zone={zone} now={now} />
+      ) : (
+        <CalendarRange
+          view={view}
+          anchor={anchor}
+          today={today}
+          zone={zone}
+          filters={filters}
+          onEvent={openEvent}
+          onCreate={create}
+          onDay={(date) => go({ view: "day", date })}
+        />
       )}
 
       {dialog ? (
@@ -289,11 +669,15 @@ export function CalendarPage() {
           open={dialog.open}
           event={dialog.event}
           date={dialog.date}
+          slot={dialog.slot}
+          intent={dialog.edit ? "edit" : undefined}
           onClose={() => setDialog((current) => (current ? { ...current, open: false } : current))}
         />
       ) : null}
       <ImportCalendarDialog open={importing} onClose={() => setImporting(false)} />
-      <p className="muted calendar-zone">Times are shown in {zone.replaceAll("_", " ")}.</p>
+      <p className="muted calendar-zone">
+        Times are shown in {zone.replaceAll("_", " ")}. {view === "day" ? "Choose an empty hour to add an event there." : null}
+      </p>
     </div>
   );
 }

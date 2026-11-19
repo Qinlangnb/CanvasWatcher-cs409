@@ -39,6 +39,8 @@ model User {
   calendars        CalendarSource[]
   events           CalendarEvent[]
   syllabi          CourseSyllabus[]
+  availabilityRules     StudyAvailabilityRule[]
+  availabilityOverrides StudyAvailabilityOverride[]
 
   @@index([previewExpiresAt])
   @@map("users")
@@ -157,6 +159,9 @@ model Course {
   sourceItems SourceItem[]
   changes     ChangeEvent[]
   syllabus    CourseSyllabus?
+  /// Travel time before and after this course's class events; it is busy, not study time.
+  commuteMinutes Int             @default(0) @map("commute_minutes")
+  events         CalendarEvent[]
 
   @@unique([userId, canvasId])
   @@index([userId, archivedAt])
@@ -327,6 +332,12 @@ model CalendarSource {
   fileName   String?         @map("file_name")
   importedAt DateTime        @default(now()) @map("imported_at") @db.Timestamptz(3)
   events     CalendarEvent[]
+  /// SHA-256 of the last imported file; importing the same file again changes nothing.
+  fileSha256           String?   @map("file_sha256")
+  /// The zone floating times were read in: the file's own, or the one the user confirmed.
+  timeZone             String?   @map("time_zone")
+  recurringSeriesCount Int       @default(0) @map("recurring_series_count")
+  lastReimportedAt     DateTime? @map("last_reimported_at") @db.Timestamptz(3)
 
   @@index([userId])
   @@map("calendar_sources")
@@ -350,9 +361,22 @@ model CalendarEvent {
   busy      Boolean         @default(true)
   createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  description    String?
+  /// IANA zone the event's wall-clock times and recurrence follow; null means the user's zone.
+  timeZone       String?  @map("time_zone")
+  /// class, busy, personal, study or other. Class events get their course's commute.
+  eventType      String   @default("other") @map("event_type")
+  courseId       Int?     @map("course_id")
+  course         Course?  @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  /// RRULE of a recurring event added by hand; startAt and endAt are its first occurrence.
+  recurrenceRule String?  @map("recurrence_rule")
+  /// Identity inside an imported file (UID, plus the occurrence for recurring events); re-imports match on it.
+  externalId     String?  @map("external_id")
 
+  @@unique([sourceId, externalId])
   @@index([userId, startAt])
   @@index([sourceId])
+  @@index([courseId])
   @@map("calendar_events")
 }
 
@@ -369,4 +393,34 @@ model CourseSyllabus {
 
   @@index([userId])
   @@map("course_syllabi")
+}
+
+/// Weekly study availability. With any rule saved, Today plans inside these intervals instead of the
+/// single daily study window. Several intervals per weekday are allowed.
+model StudyAvailabilityRule {
+  id          Int     @id @default(autoincrement())
+  userId      String  @map("user_id") @db.Uuid
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// 0 = Monday ... 6 = Sunday.
+  weekday     Int
+  /// Minutes after local midnight; the end is exclusive.
+  startMinute Int     @map("start_minute")
+  endMinute   Int     @map("end_minute")
+  enabled     Boolean @default(true)
+
+  @@index([userId])
+  @@map("study_availability_rules")
+}
+
+/// Replaces the weekly rules on one local date. No intervals means not available that day.
+model StudyAvailabilityOverride {
+  id        Int      @id @default(autoincrement())
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date      DateTime @db.Date
+  /// [{ start: "HH:MM", end: "HH:MM" }]
+  intervals Json
+
+  @@unique([userId, date])
+  @@map("study_availability_overrides")
 }

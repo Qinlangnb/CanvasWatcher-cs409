@@ -46,6 +46,8 @@ export interface Course extends CourseSummary {
   html_url: string;
   archived: boolean;
   last_seen_at: string;
+  /** Busy travel time before and after this course's class events. */
+  commute_minutes: number;
   counts: { open_tasks: number; unread_changes: number; files: number };
 }
 
@@ -228,6 +230,10 @@ export interface Today {
   date: string;
   time_zone: string;
   study_window: { start: string; end: string };
+  /** Today's study intervals: the weekly availability, or the single study window. */
+  study_windows: { start: string; end: string }[];
+  /** availability, calendar (availability less busy events) or fallback (study window and daily goal). */
+  capacity_source: CapacitySource;
   goal_minutes: number;
   free_minutes: number;
   capacity_minutes: number;
@@ -242,16 +248,30 @@ export interface Today {
   events: CalendarEvent[];
 }
 
+export type CapacitySource = "calendar" | "availability" | "fallback";
+
+export type EventType = "class" | "busy" | "personal" | "study" | "other";
+
 export interface CalendarEvent {
   id: number;
+  /** Unique per occurrence; occurrences of a recurring event share `id`. */
+  key: string;
   title: string;
   location: string | null;
+  description: string | null;
   all_day: boolean;
   /** "YYYY-MM-DD" for all-day events, otherwise an ISO instant. */
   start: string;
   /** Exclusive: the day after the last day, or when the event ends. */
   end: string;
   busy: boolean;
+  event_type: EventType;
+  /** IANA zone of the event's wall-clock times; null follows the planning zone. */
+  time_zone: string | null;
+  course: { id: number; code: string } | null;
+  recurrence_rule: string | null;
+  /** The first occurrence of a recurring event; edits change the whole series. */
+  series: { start: string; end: string } | null;
   source: { id: number; name: string } | null;
   /** Only events added by hand can be changed; imported ones follow their file. */
   editable: boolean;
@@ -260,10 +280,16 @@ export interface CalendarEvent {
 export interface EventFields {
   title: string;
   location: string | null;
+  description?: string | null;
   all_day: boolean;
+  /** An instant, a date (all day), or a wall-clock time read in `time_zone`. */
   start: string;
   end: string;
   busy: boolean;
+  time_zone?: string | null;
+  event_type?: EventType;
+  course_id?: number | null;
+  recurrence_rule?: string | null;
 }
 
 export interface CalendarSource {
@@ -271,10 +297,41 @@ export interface CalendarSource {
   name: string;
   file_name: string | null;
   imported_at: string;
+  last_reimported_at: string | null;
   event_count: number;
+  recurring_series_count: number;
+  /** The zone floating times were read in; null when every time named its own. */
+  time_zone: string | null;
+  range_start: string | null;
+  range_end: string | null;
+  read_only: true;
+}
+
+export interface IcsReconciliation {
+  new: number;
+  updated: number;
+  removed: number;
+  unchanged: number;
+}
+
+export interface IcsPreview {
+  file_name: string | null;
+  file_sha256: string;
+  calendar_name: string | null;
+  calendar_time_zone: string | null;
+  time_zone_confirmation_required: boolean;
+  event_count: number;
+  recurring_series_count: number;
+  range_start: string | null;
+  range_end: string | null;
+  reconciliation: IcsReconciliation;
+  no_op: boolean;
+  truncated: boolean;
+  warnings: string[];
 }
 
 export interface CalendarImport extends CalendarSource {
   /** The file had more events than one import keeps. */
   truncated: boolean;
+  preview: IcsPreview;
 }

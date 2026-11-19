@@ -570,7 +570,7 @@ export function useCalendarSources() {
 export function useImportCalendar() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (body: { name?: string; file_name?: string; ics: string }) =>
+    mutationFn: (body: { name?: string; file_name?: string; ics: string; time_zone?: string | null }) =>
       request<CalendarImport>("/api/calendar/sources", { method: "POST", body }),
     onSuccess: () => invalidateCalendar(client),
   });

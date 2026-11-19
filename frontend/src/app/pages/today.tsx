@@ -21,6 +21,13 @@ function greeting(hour: number): string {
   return "Good evening";
 }
 
+/** Where today's capacity comes from, as the original app labelled it. */
+const CAPACITY_SOURCES: Record<string, string> = {
+  calendar: "Capacity: availability less calendar events.",
+  availability: "Capacity: weekly availability.",
+  fallback: "Capacity: study window and daily goal.",
+};
+
 /** How much of today's goal is planned, and why the plan may hold less than the goal. */
 function PlanMeter({ plan, now }: { plan: Today; now: Date }) {
   const zone = plan.time_zone;
@@ -29,8 +36,23 @@ function PlanMeter({ plan, now }: { plan: Today; now: Date }) {
   const ended = now >= new Date(plan.study_window.end);
   const share = plan.goal_minutes > 0 ? Math.min(100, Math.round((plan.planned_minutes / plan.goal_minutes) * 100)) : 0;
 
+  // With weekly availability the free time itself is the day's capacity; otherwise the daily goal caps it.
+  const byAvailability = plan.capacity_source !== "fallback";
+  const windows = (plan.study_windows ?? [])
+    .map((window) => `${formatTime(new Date(window.start), zone)}–${formatTime(new Date(window.end), zone)}`)
+    .join(", ");
+  const target = byAvailability ? plan.capacity_minutes : plan.goal_minutes;
+  const meterShare = byAvailability ? (target > 0 ? Math.min(100, Math.round((plan.planned_minutes / target) * 100)) : 0) : share;
+
   let note: string;
-  if (ended) note = `Your study window ended at ${windowEnd}. Tomorrow's plan starts at ${windowStart}.`;
+  if (byAvailability) {
+    if (!windows) note = "You marked today as unavailable for study.";
+    else if (plan.free_minutes === 0) note = `Nothing is free in today's availability (${windows}).`;
+    else
+      note = `${formatMinutes(plan.free_minutes)} free in today's availability (${windows})${
+        plan.capacity_source === "calendar" ? " after events and commute" : ""
+      }.`;
+  } else if (ended) note = `Your study window ended at ${windowEnd}. Tomorrow's plan starts at ${windowStart}.`;
   else if (plan.free_minutes === 0) note = `Your calendar is full for the rest of your study window (${windowStart}–${windowEnd}).`;
   else if (plan.capacity_minutes < plan.goal_minutes)
     note = `Only ${formatMinutes(plan.free_minutes)} is free in your study window (${windowStart}–${windowEnd}) after your events.`;
@@ -40,12 +62,14 @@ function PlanMeter({ plan, now }: { plan: Today; now: Date }) {
     <div className="plan-meter">
       <p className="plan-meter-figures">
         <strong>{formatMinutes(plan.planned_minutes)}</strong> planned
-        <span> of your {formatMinutes(plan.goal_minutes)} daily goal</span>
+        <span>{byAvailability ? ` of ${formatMinutes(target)} free study time` : ` of your ${formatMinutes(plan.goal_minutes)} daily goal`}</span>
       </p>
       <div className="meter" aria-hidden="true">
-        <span style={{ width: `${share}%` }} />
+        <span style={{ width: `${meterShare}%` }} />
       </div>
-      <p className="muted">{note}</p>
+      <p className="muted">
+        {note} <span className="capacity-source">{CAPACITY_SOURCES[plan.capacity_source] ?? CAPACITY_SOURCES.fallback}</span>
+      </p>
     </div>
   );
 }

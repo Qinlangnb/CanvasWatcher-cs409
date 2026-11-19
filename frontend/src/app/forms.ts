@@ -1,7 +1,7 @@
 // The pure side of the task and event forms: defaults, drafts, validation and the API bodies.
 // Kept free of React so tests can load it directly.
 import { ApiError } from "./api";
-import type { CalendarEvent, EventFields, Task, TaskChanges, TaskType } from "./types";
+import type { CalendarEvent, EventFields, EventType, Task, TaskChanges, TaskType } from "./types";
 import { addDays, fromLocalInput, localDate, toLocalInput } from "./zoned";
 
 /** Field messages from a 422, plus one sentence for anything else. */
@@ -129,6 +129,8 @@ export function taskChanges(task: Task, initial: TaskDraft, draft: TaskDraft, zo
 /** Below the server's 1.5 MB limit, leaving room for the JSON escaping of line breaks. */
 export const MAX_ICS_BYTES = 1_400_000;
 
+export const EVENT_TYPES: EventType[] = ["class", "busy", "personal", "study", "other"];
+
 export interface EventDraft {
   title: string;
   location: string;
@@ -138,19 +140,39 @@ export interface EventDraft {
   /** All day: the last day, inclusive (the API's end is the day after). */
   end: string;
   busy: boolean;
+  description?: string;
+  /** IANA zone of the times; empty follows the planning zone. */
+  timeZone?: string;
+  eventType?: EventType;
+  /** A course id, or empty for none. */
+  courseId?: string;
+  /** RRULE, or empty for a one-off event. */
+  recurrence?: string;
 }
 
 export function eventDraft(event: CalendarEvent | undefined, date: string, zone: string, now: Date): EventDraft {
   if (event) {
+    // A recurring event is edited as a whole series, from its first occurrence.
+    const start = event.series?.start ?? event.start;
+    const end = event.series?.end ?? event.end;
+    const shown = event.time_zone ?? zone;
+    const extra = {
+      description: event.description ?? "",
+      timeZone: event.time_zone ?? "",
+      eventType: event.event_type,
+      courseId: event.course ? String(event.course.id) : "",
+      recurrence: event.recurrence_rule ?? "",
+    };
     return event.all_day
-      ? { title: event.title, location: event.location ?? "", allDay: true, start: event.start, end: addDays(event.end, -1), busy: event.busy }
+      ? { title: event.title, location: event.location ?? "", allDay: true, start, end: addDays(end, -1), busy: event.busy, ...extra }
       : {
           title: event.title,
           location: event.location ?? "",
           allDay: false,
-          start: toLocalInput(event.start, zone),
-          end: toLocalInput(event.end, zone),
+          start: toLocalInput(start, shown),
+          end: toLocalInput(end, shown),
           busy: event.busy,
+          ...extra,
         };
   }
   // Today: the next whole hour. Another day: 9 AM.
@@ -163,10 +185,32 @@ export function eventDraft(event: CalendarEvent | undefined, date: string, zone:
     start: `${date}T${pad(hour)}:00`,
     end: hour < 23 ? `${date}T${pad(hour + 1)}:00` : `${date}T23:59`,
     busy: true,
+    description: "",
+    timeZone: "",
+    eventType: "other",
+    courseId: "",
+    recurrence: "",
   };
 }
 
-/** The API body for a draft, or the fields to fix first. */
+const LOCAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
+
+/** The fields the original app added to events: only sent when the draft has them. */
+function extraFields(draft: EventDraft): Partial<EventFields> {
+  if (draft.eventType === undefined) return {};
+  return {
+    description: draft.description?.trim() || null,
+    time_zone: draft.timeZone?.trim() || null,
+    event_type: draft.eventType,
+    course_id: draft.courseId ? Number(draft.courseId) : null,
+    recurrence_rule: draft.recurrence?.trim() || null,
+  };
+}
+
+/**
+ * The API body for a draft, or the fields to fix first. Timed events with the extra fields send
+ * wall-clock times plus their zone, so the server can refuse daylight-saving gaps and overlaps.
+ */
 export function eventBody(draft: EventDraft, zone: string): { body?: EventFields; errors: Record<string, string> } {
   const errors: Record<string, string> = {};
   if (!draft.title.trim()) errors.title = "Give the event a title.";
@@ -178,6 +222,12 @@ export function eventBody(draft: EventDraft, zone: string): { body?: EventFields
     if (!start) errors.start = "Choose the first day.";
     if (!end) errors.end = "Choose the last day.";
     else if (start && end <= start) errors.end = "The last day can't be before the first.";
+  } else if (draft.eventType !== undefined) {
+    start = LOCAL_TIME.test(draft.start) ? draft.start : null;
+    end = LOCAL_TIME.test(draft.end) ? draft.end : null;
+    if (!start) errors.start = "Enter when it starts.";
+    if (!end) errors.end = "Enter when it ends.";
+    else if (start && end <= start) errors.end = "It has to end after it starts.";
   } else {
     start = fromLocalInput(draft.start, zone);
     end = fromLocalInput(draft.end, zone);
@@ -188,6 +238,14 @@ export function eventBody(draft: EventDraft, zone: string): { body?: EventFields
   if (Object.keys(errors).length > 0 || !start || !end) return { errors };
   return {
     errors,
-    body: { title: draft.title.trim(), location: draft.location.trim() || null, all_day: draft.allDay, start, end, busy: draft.busy },
+    body: {
+      title: draft.title.trim(),
+      location: draft.location.trim() || null,
+      all_day: draft.allDay,
+      start,
+      end,
+      busy: draft.busy,
+      ...extraFields(draft),
+    },
   };
 }

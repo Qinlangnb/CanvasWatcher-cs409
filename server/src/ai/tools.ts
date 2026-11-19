@@ -5,6 +5,7 @@ import { openToken } from "../canvas/client.js";
 import { blocksText } from "../canvas/richText.js";
 import { findSyllabus, type Syllabus } from "../canvas/syllabus.js";
 import { keepSyllabus, keptSyllabus } from "../canvas/syllabusStore.js";
+import { occurrencesBetween } from "../calendar/events.js";
 import type { Db } from "../db.js";
 import type { Prisma } from "../generated/prisma/client.js";
 import { openTaskWhere, presentTask, taskDescription, taskInclude, type TaskWithCourse } from "../routes/present.js";
@@ -246,21 +247,21 @@ const handlers: Record<ToolName, Handler> = {
     const today = DateTime.fromJSDate(ctx.now, { zone: ctx.timeZone }).toISODate() as string;
     const from = dayStart(args.from ?? today, ctx.timeZone);
     const to = args.to ? dayEnd(args.to, ctx.timeZone) : DateTime.fromJSDate(from).plus({ days: 14 }).toJSDate();
-    const events = await ctx.db.calendarEvent.findMany({
-      where: { userId: ctx.userId, startAt: { lte: to }, endAt: { gte: from } },
-      orderBy: [{ startAt: "asc" }, { id: "asc" }],
-      take: args.limit,
-      select: { title: true, location: true, startAt: true, endAt: true, allDay: true, busy: true },
-    });
+    // Recurring events added by hand are stored once; occurrencesBetween expands them.
+    const span = Math.min(to.getTime(), from.getTime() + 62 * 86_400_000);
+    const { occurrences } = await occurrencesBetween(ctx.db, ctx.userId, from, new Date(Math.max(span, from.getTime() + 1)), ctx.timeZone);
+    const events = occurrences.slice(0, args.limit);
     return {
       count: events.length,
-      events: events.map((event) => ({
+      events: events.map(({ event, start, end }) => ({
         title: event.title,
         location: event.location,
-        start: localTime(event.startAt, ctx.timeZone),
-        end: localTime(event.endAt, ctx.timeZone),
+        start: localTime(start, ctx.timeZone),
+        end: localTime(end, ctx.timeZone),
         all_day: event.allDay,
         busy: event.busy,
+        type: event.eventType,
+        course: event.course?.courseCode ?? null,
       })),
     };
   },

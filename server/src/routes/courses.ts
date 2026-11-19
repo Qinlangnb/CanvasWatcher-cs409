@@ -19,6 +19,16 @@ const listQuery = z.object({
 
 const archive = z.object({ archived: z.boolean({ error: "Send archived as true or false." }) });
 
+const commute = z
+  .object({
+    commute_minutes: z
+      .number({ error: "Send a whole number of minutes." })
+      .int("Send a whole number of minutes.")
+      .min(0, "Use 0 to 240 minutes.")
+      .max(240, "Use 0 to 240 minutes."),
+  })
+  .strict();
+
 const courseNotFound = () => new HttpError(404, "COURSE_NOT_FOUND", "That course could not be found.");
 
 /** Open tasks, unread changes and files per course, in three grouped queries. */
@@ -125,6 +135,17 @@ export function coursesRouter(db: Db, services: Services): Router {
         ? course
         : await db.course.update({ where: { id }, data: { archivedAt: body.archived ? new Date() : null } });
     res.json(await presentOne(userId, updated));
+  });
+
+  /** Travel time around this course's class events; Today and the calendar treat it as busy. */
+  router.patch("/:id/commute", async (req, res) => {
+    const userId = currentAuth(res.locals).user.id;
+    const id = idParam(req.params.id, courseNotFound());
+    const body = commute.parse(req.body ?? {});
+    const { count } = await db.course.updateMany({ where: { id, userId }, data: { commuteMinutes: body.commute_minutes } });
+    if (!count) throw courseNotFound();
+    const course = (await db.course.findFirst({ where: { id, userId } })) as Course;
+    res.json(await presentOne(userId, course));
   });
 
   return router;
