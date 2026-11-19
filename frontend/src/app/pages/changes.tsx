@@ -9,13 +9,13 @@ import { useToast } from "../toast";
 import { EmptyState, PageHeader, QueryError, SkeletonList, Spinner } from "../ui";
 
 /** Changes newest first, loaded a page at a time, with the detail dialog. */
-export function ChangeFeed({ courseId, unread = false }: { courseId?: number; unread?: boolean }) {
+export function ChangeFeed({ courseId, unread = false, important = false }: { courseId?: number; unread?: boolean; important?: boolean }) {
   const now = useNow();
   const [pages, setPages] = useState(1);
   const [open, setOpen] = useState<number | null>(null);
-  const changes = useChanges({ courseId, unread, pages });
+  const changes = useChanges({ courseId, unread, important, pages });
 
-  useEffect(() => setPages(1), [courseId, unread]);
+  useEffect(() => setPages(1), [courseId, unread, important]);
 
   if (changes.isPending) return <SkeletonList rows={4} label="Loading changes" />;
   if (changes.isError) return <QueryError error={changes.error} retry={() => changes.refetch()} />;
@@ -28,7 +28,9 @@ export function ChangeFeed({ courseId, unread = false }: { courseId?: number; un
         <EmptyState icon={<BellIcon size={28} />} title={unread ? "No unread changes" : "No changes yet"}>
           {unread
             ? "You have seen everything. Switch to All to look back."
-            : "CanvasWatcher records a change when a due date, file or announcement differs from the last sync."}
+            : important
+              ? "New files, announcements, grades and deadline changes show up here. Switch to Everything for other edits."
+              : "CanvasWatcher records a change when a due date, file or announcement differs from the last sync."}
         </EmptyState>
       ) : (
         <ChangeList changes={items} now={now} onOpen={setOpen} showCourse={courseId === undefined} />
@@ -71,11 +73,13 @@ export function MarkAllReadButton({ courseId, unreadCount }: { courseId?: number
 export function ChangesPage() {
   const [params, setParams] = useSearchParams();
   const unread = params.get("show") === "unread";
+  // The Important set by default, like the original app; "Everything" adds edits and removals.
+  const important = params.get("scope") !== "all";
   const courseId = Number(params.get("course")) || undefined;
   const courses = useCourses();
-  const unreadCount = useUnreadCount();
+  const unreadCount = useUnreadCount(true, important);
   const courseUnread = courses.data?.find((course) => course.id === courseId)?.counts.unread_changes;
-  const count = courseId ? (courseUnread ?? 0) : (unreadCount.data?.count ?? 0);
+  const count = courseId && !important ? (courseUnread ?? 0) : (unreadCount.data?.count ?? 0);
 
   const update = (changes: Record<string, string | undefined>) => {
     const next = new URLSearchParams(params);
@@ -90,10 +94,22 @@ export function ChangesPage() {
     <div className="page">
       <PageHeader
         title="Changes"
-        description="Everything CanvasWatcher noticed in your courses, newest first."
+        description={
+          important
+            ? "New files, new announcements, grade releases and deadline changes, newest first. Page edits and other updates are under Everything."
+            : "Everything CanvasWatcher noticed in your courses, newest first."
+        }
         actions={<MarkAllReadButton courseId={courseId} unreadCount={count} />}
       />
       <div className="toolbar">
+        <div className="segmented" role="group" aria-label="Which changes">
+          <button type="button" aria-pressed={important} onClick={() => update({ scope: undefined })}>
+            Important
+          </button>
+          <button type="button" aria-pressed={!important} onClick={() => update({ scope: "all" })}>
+            Everything
+          </button>
+        </div>
         <div className="segmented" role="group" aria-label="Show">
           <button type="button" aria-pressed={!unread} onClick={() => update({ show: undefined })}>
             All
@@ -115,7 +131,7 @@ export function ChangesPage() {
         </label>
       </div>
       <section className="card" aria-label="Change list">
-        <ChangeFeed courseId={courseId} unread={unread} />
+        <ChangeFeed courseId={courseId} unread={unread} important={important} />
       </section>
     </div>
   );

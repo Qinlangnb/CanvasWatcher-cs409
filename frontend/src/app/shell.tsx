@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router";
 import { isApiError } from "./api";
 import { AiChat } from "./aiChat";
+import { NotificationBanners } from "./important";
 import { PREVIEW_UNAVAILABLE, PreviewBanner, UnavailableButton } from "./preview";
 import { syncOutcome, timeAgo, type SyncOutcome } from "./format";
 import { AlertIcon, BellIcon, BookIcon, CalendarIcon, CheckIcon, FolderIcon, GearIcon, LogoMark, SunIcon, SyncIcon } from "./icons";
@@ -266,6 +267,7 @@ export function AppShell() {
 
         <main id="main" className="main" tabIndex={-1}>
           <PreviewBanner />
+          <NotificationBanners />
           {rejected ? (
             <div className="banner">
               <Alert

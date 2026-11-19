@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { REASON_LABELS, dayOffset, dueDayLabel, formatLongDate, formatMinutes, formatTime, hourOf, plural } from "../format";
 import { BellIcon, CalendarIcon, ChevronRightIcon, ClipboardIcon, PlusIcon } from "../icons";
 import { ChangeDialog, ChangeList, ExpandableTaskRow, TaskList } from "../lists";
+import { AttentionSection } from "../important";
 import { TaskCard } from "../taskCard";
 import { useChanges, useConnection, useMe, useToday, useUpdateTask } from "../queries";
 import { useNow } from "../shell";
@@ -346,7 +347,7 @@ function DoneSection({ plan, now }: { plan: Today; now: Date }) {
 }
 
 function ChangesSection({ now, onOpen }: { now: Date; onOpen: (id: number) => void }) {
-  const changes = useChanges({ unread: true, pages: 1 });
+  const changes = useChanges({ unread: true, important: true, pages: 1 });
   const unread = changes.data?.items ?? [];
   return (
     <section className="card" aria-labelledby="changes-heading">
@@ -420,6 +421,7 @@ export function TodayPage() {
         <div className="today-side">
           {plan ? <ScheduleSection plan={plan} /> : null}
           {plan ? <DoneSection plan={plan} now={now} /> : null}
+          <AttentionSection now={now} onOpen={setOpenChange} />
           <ChangesSection now={now} onOpen={setOpenChange} />
         </div>
       </div>

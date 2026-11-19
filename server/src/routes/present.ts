@@ -10,6 +10,8 @@ import type {
   Task,
 } from "../generated/prisma/client.js";
 import type { Db } from "../db.js";
+import type { Content } from "../canvas/normalize.js";
+import { eventLabel, transition } from "../changes/taxonomy.js";
 import { remainingBasis, remainingMinutes, totalMinutes } from "../tasks/effort.js";
 
 const iso = (date: Date | null) => (date ? date.toISOString() : null);
@@ -154,6 +156,21 @@ export type ChangeWithItem = ChangeEvent & {
   sourceItem: Pick<SourceItem, "kind" | "title" | "htmlUrl">;
 };
 
+/** The taxonomy fields of a change (changes/taxonomy.ts). */
+function changeTaxonomy(change: ChangeWithItem) {
+  const name = transition(change.sourceItem.kind, change.changeType, change.category, change.before as Content | null);
+  return {
+    category: change.category,
+    importance: change.importance,
+    requires_action: change.requiresAction,
+    user_facing: change.userFacing,
+    event_label: eventLabel(name),
+    course_code: change.course.courseCode,
+    primary_text: `${change.course.courseCode}: ${change.aiSummary ?? change.summary}`,
+    ai_summary: change.aiSummary,
+  };
+}
+
 export const changeInclude = {
   course: { select: courseSummarySelect },
   sourceItem: { select: { kind: true, title: true, htmlUrl: true } },
@@ -171,5 +188,6 @@ export function presentChange(change: ChangeWithItem) {
     html_url: change.sourceItem.htmlUrl,
     detected_at: iso(change.detectedAt),
     read: change.readAt !== null,
+    ...changeTaxonomy(change),
   };
 }

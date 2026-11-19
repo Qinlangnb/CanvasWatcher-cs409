@@ -185,14 +185,39 @@ export interface Change {
   html_url: string | null;
   detected_at: string;
   read: boolean;
+  /** Taxonomy: what kind of change it is and whether the default "Important" feed shows it. */
+  category: ChangeCategory;
+  importance: "minor" | "important" | "critical";
+  requires_action: boolean;
+  user_facing: boolean;
+  event_label: string;
+  course_code: string;
+  /** "CODE: summary", using the AI review's sentence once there is one. */
+  primary_text: string;
+  ai_summary: string | null;
 }
 
+export type ChangeCategory = "grade" | "deadline" | "file" | "announcement" | "assignment" | "content";
+
 export type ContentValue = string | number | null;
+
+export interface ChangeReview {
+  status: "pending" | "waiting_ai" | "reviewing" | "ready" | "suppressed" | "failed";
+  notify_user: boolean;
+  severity: "low" | "medium" | "high" | "critical" | null;
+  reason: string | null;
+  recommended_action: string | null;
+  reviewed_at: string | null;
+}
 
 export interface ChangeDetail extends Change {
   before: Record<string, ContentValue> | null;
   after: Record<string, ContentValue> | null;
   related_task: Task | null;
+  before_text: string | null;
+  after_text: string | null;
+  review: ChangeReview | null;
+  internals: Record<string, unknown>;
 }
 
 export interface ChangePage {
@@ -277,4 +302,78 @@ export interface CalendarSource {
 export interface CalendarImport extends CalendarSource {
   /** The file had more events than one import keeps. */
   truncated: boolean;
+}
+
+// --- Important Changes: banners, AI review, noise filters, grading policy ---
+
+export interface AppNotification {
+  id: number;
+  level: "important" | "critical";
+  title: string;
+  body: string;
+  change_id: number | null;
+  created_at: string;
+}
+
+export interface AttentionItem extends ChangeReview {
+  change: Change;
+}
+
+export interface FilterRuleSpec {
+  course_id: number;
+  source_type: string;
+  source_name: string;
+  change_type: string;
+  field: string;
+  operator: string;
+  pattern: string;
+}
+
+export interface FilterRule {
+  id: number;
+  enabled: boolean;
+  removed: boolean;
+  rule: FilterRuleSpec;
+  course_code: string | null;
+  reason: string;
+  created_by: "AI" | "USER";
+  created_at: string;
+  updated_at: string;
+  version: number;
+  match_count: number;
+  last_matched_at: string | null;
+  audit: { actor: string; action: string; reason: string; version: number; created_at: string }[];
+}
+
+export interface ReviewDiagnostic {
+  change_id: number;
+  summary: string;
+  status: string;
+  stage1: string;
+  stage1_reason: string;
+  notify_user: boolean;
+  reason: string | null;
+  matched_rule: { id: number } | null;
+  error: string | null;
+}
+
+export interface ChangeFilters {
+  rules: FilterRule[];
+  recent_reviews: ReviewDiagnostic[];
+}
+
+export interface GradingCategory {
+  id: string;
+  name: string;
+  weight: number | null;
+  drop_lowest: number;
+  drop_highest: number;
+  never_drop: { canvas_id: string; title: string | null }[];
+}
+
+export interface CoursePolicy {
+  source: "canvas";
+  weighted: boolean;
+  fetched_at: string;
+  grading_categories: GradingCategory[];
 }

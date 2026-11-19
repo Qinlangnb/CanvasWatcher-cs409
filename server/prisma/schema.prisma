@@ -39,6 +39,11 @@ model User {
   calendars        CalendarSource[]
   events           CalendarEvent[]
   syllabi          CourseSyllabus[]
+  changeReviews    ChangeReview[]
+  changeFilters    ChangeFilterRule[]
+  filterAudits     ChangeFilterAudit[]
+  notifications    Notification[]
+  coursePolicies   CoursePolicy[]
 
   @@index([previewExpiresAt])
   @@map("users")
@@ -157,6 +162,7 @@ model Course {
   sourceItems SourceItem[]
   changes     ChangeEvent[]
   syllabus    CourseSyllabus?
+  policy      CoursePolicy?
 
   @@unique([userId, canvasId])
   @@index([userId, archivedAt])
@@ -294,7 +300,22 @@ model ChangeEvent {
   after        Json?
   detectedAt   DateTime   @default(now()) @map("detected_at") @db.Timestamptz(3)
   readAt       DateTime?  @map("read_at") @db.Timestamptz(3)
+  /// grade, deadline, file, announcement, assignment or content (see changes/taxonomy.ts).
+  category       String         @default("content")
+  /// minor, important or critical.
+  importance     String         @default("minor")
+  requiresAction Boolean        @default(false) @map("requires_action")
+  /// In the default "Important" feed: new files and announcements, grade releases and deadline changes.
+  userFacing     Boolean        @default(false) @map("user_facing")
+  /// SHA-256 of the item, the transition and its before and after values, so one transition is reported once.
+  semanticKey    String?        @map("semantic_key")
+  /// The AI review's reason, once a review approved or rejected the change.
+  aiSummary      String?        @map("ai_summary")
+  review         ChangeReview?
+  notifications  Notification[]
 
+  @@unique([userId, semanticKey])
+  @@index([userId, userFacing, readAt])
   /// The feed is newest first by id (ids grow with detection time), paged with an id cursor.
   @@index([userId, id])
   @@index([userId, readAt])
@@ -369,4 +390,124 @@ model CourseSyllabus {
 
   @@index([userId])
   @@map("course_syllabi")
+}
+
+/// The review of one change (see changes/review.ts). The row doubles as the job the review worker claims:
+/// stage 1 is a fixed prefilter, stage 2 an optional AI decision on whether to tell the student.
+model ChangeReview {
+  id                Int         @id @default(autoincrement())
+  userId            String      @map("user_id") @db.Uuid
+  user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  changeEventId     Int         @unique @map("change_event_id")
+  changeEvent       ChangeEvent @relation(fields: [changeEventId], references: [id], onDelete: Cascade)
+  /// PENDING, WAITING_AI (no AI for this user yet), REVIEWING, READY, SUPPRESSED or FAILED.
+  status            String      @default("PENDING")
+  /// AI_REVIEW or DROP, and why.
+  stage1            String
+  stage1Reason      String      @map("stage1_reason")
+  /// The bounded, academic-only facts the AI sees and filters match against.
+  context           Json
+  matchedRule       Json?       @map("matched_rule")
+  notifyUser        Boolean     @default(false) @map("notify_user")
+  /// low, medium, high or critical, as the AI judged it.
+  severity          String?
+  reason            String?
+  recommendedAction String?     @map("recommended_action")
+  /// What happened to a filter the AI proposed: { rule_id, version } or { error }.
+  ruleFeedback      Json?       @map("rule_feedback")
+  error             String?
+  attempts          Int         @default(0)
+  reviewedAt        DateTime?   @map("reviewed_at") @db.Timestamptz(3)
+  createdAt         DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([status, updatedAt])
+  @@index([userId, status])
+  @@map("change_reviews")
+}
+
+/// A declarative rule that keeps a kind of noise away from AI review. Never a regex or code.
+model ChangeFilterRule {
+  id            Int                 @id @default(autoincrement())
+  userId        String              @map("user_id") @db.Uuid
+  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Hash of the rule's scope and field (its "family"); one rule per family.
+  identityKey   String              @map("identity_key")
+  enabled       Boolean             @default(true)
+  /// Removed rules stay, with their audit history, and can be restored.
+  removed       Boolean             @default(false)
+  /// { course_id, source_type, source_name, change_type, field, operator, pattern }.
+  rule          Json
+  reason        String
+  /// AI or USER.
+  createdBy     String              @map("created_by")
+  version       Int                 @default(1)
+  matchCount    Int                 @default(0) @map("match_count")
+  lastMatchedAt DateTime?           @map("last_matched_at") @db.Timestamptz(3)
+  createdAt     DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  audits        ChangeFilterAudit[]
+
+  @@unique([userId, identityKey])
+  @@map("change_filter_rules")
+}
+
+/// Every change to a filter rule, by the AI or the student.
+model ChangeFilterAudit {
+  id        Int              @id @default(autoincrement())
+  userId    String           @map("user_id") @db.Uuid
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ruleId    Int              @map("rule_id")
+  rule      ChangeFilterRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  version   Int
+  /// AI or USER.
+  actor     String
+  /// create, update, enable, disable or remove.
+  action    String
+  reason    String
+  before    Json?
+  after     Json
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([ruleId, id])
+  @@index([userId])
+  @@map("change_filter_audits")
+}
+
+/// A banner at the top of the app until the student dismisses it.
+model Notification {
+  id            Int          @id @default(autoincrement())
+  userId        String       @map("user_id") @db.Uuid
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Set for banners about a change the AI review approved.
+  changeEventId Int?         @map("change_event_id")
+  changeEvent   ChangeEvent? @relation(fields: [changeEventId], references: [id], onDelete: Cascade)
+  /// important or critical.
+  level         String
+  title         String
+  body          String
+  /// The same key is never shown twice, for example `change:12` or `auth-required:canvas`.
+  dedupeKey     String       @map("dedupe_key")
+  dismissedAt   DateTime?    @map("dismissed_at") @db.Timestamptz(3)
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, dismissedAt])
+  @@map("notifications")
+}
+
+/// How a course is graded, from Canvas assignment groups. Canvas is the authority, so it is replaced on every sync.
+model CoursePolicy {
+  courseId  Int      @id @map("course_id")
+  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Canvas `apply_assignment_group_weights`: whether group weights decide the final grade.
+  weighted  Boolean
+  /// [{ id, name, weight, drop_lowest, drop_highest, never_drop }], in Canvas order.
+  groups    Json
+  fetchedAt DateTime @map("fetched_at") @db.Timestamptz(3)
+
+  @@index([userId])
+  @@map("course_policies")
 }

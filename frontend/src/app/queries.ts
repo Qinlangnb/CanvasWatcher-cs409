@@ -51,9 +51,9 @@ export const keys = {
   events: (from: string, to: string) => ["events", { from, to }] as const,
   sources: ["calendar-sources"] as const,
   files: (params: { courseId?: number; q?: string }) => ["files", params] as const,
-  changes: (params: { courseId?: number; unread?: boolean }) => ["changes", "list", params] as const,
+  changes: (params: { courseId?: number; unread?: boolean; important?: boolean }) => ["changes", "list", params] as const,
   change: (id: number) => ["changes", "detail", id] as const,
-  unreadCount: ["changes", "unread-count"] as const,
+  unreadCount: (important: boolean) => ["changes", "unread-count", { important }] as const,
 };
 
 function query(path: string, params: Record<string, string | number | boolean | undefined>): string {
@@ -416,7 +416,8 @@ export function useFiles(params: { courseId?: number; q?: string; pages: number 
 
 export const CHANGE_PAGE_SIZE = 30;
 
-export function useChanges(params: { courseId?: number; unread?: boolean; pages: number }) {
+/** `important` keeps to the Important set: new files and announcements, grade releases and deadline changes. */
+export function useChanges(params: { courseId?: number; unread?: boolean; important?: boolean; pages: number }) {
   const { pages, ...filters } = params;
   return useQuery({
     queryKey: [...keys.changes(filters), pages],
@@ -428,6 +429,7 @@ export function useChanges(params: { courseId?: number; unread?: boolean; pages:
           query("/api/changes", {
             course_id: filters.courseId,
             unread: filters.unread || undefined,
+            important: filters.important || undefined,
             limit: CHANGE_PAGE_SIZE,
             before: before ?? undefined,
           }),
@@ -450,10 +452,11 @@ export function useChange(id: number | null) {
   });
 }
 
-export function useUnreadCount(enabled = true) {
+/** Unread changes; the Important set unless `important` is false, like the Changes page's default. */
+export function useUnreadCount(enabled = true, important = true) {
   return useQuery({
-    queryKey: keys.unreadCount,
-    queryFn: () => request<{ count: number }>("/api/changes/unread-count"),
+    queryKey: keys.unreadCount(important),
+    queryFn: () => request<{ count: number }>(query("/api/changes/unread-count", { important: important || undefined })),
     enabled,
   });
 }

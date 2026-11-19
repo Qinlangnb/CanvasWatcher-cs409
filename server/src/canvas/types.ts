@@ -16,6 +16,8 @@ export interface CanvasCourse {
   access_restricted_by_date?: boolean;
   term?: { name?: string | null; start_at?: string | null; end_at?: string | null } | null;
   enrollments?: { enrollment_state?: string }[];
+  /** Whether assignment group weights decide the final grade. */
+  apply_assignment_group_weights?: boolean;
 }
 
 export interface CanvasAssignment {
@@ -55,4 +57,13 @@ export interface CanvasAnnouncement {
   message?: string | null;
   posted_at?: string | null;
   html_url?: string;
+}
+
+/** A grading category and its drop rules. */
+export interface CanvasAssignmentGroup {
+  id: CanvasId;
+  name?: string;
+  position?: number;
+  group_weight?: number | null;
+  rules?: { drop_lowest?: number; drop_highest?: number; never_drop?: CanvasId[] } | null;
 }

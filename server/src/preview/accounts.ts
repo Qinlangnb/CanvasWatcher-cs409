@@ -72,6 +72,8 @@ export async function resetPreview(db: Db, userId: string, template: User): Prom
       await tx.calendarEvent.deleteMany({ where: { userId } });
       await tx.canvasConnection.deleteMany({ where: { userId } });
       await tx.userSettings.deleteMany({ where: { userId } });
+      await tx.notification.deleteMany({ where: { userId } });
+      await tx.changeFilterRule.deleteMany({ where: { userId } });
       await copyAccount(tx, template, userId);
     },
     { timeout: COPY_TIMEOUT_MS },
@@ -139,6 +141,38 @@ export function identityScrubber(
 
 const asJson = (value: Prisma.JsonValue | null): Prisma.InputJsonValue | undefined =>
   value === null ? undefined : (value as Prisma.InputJsonValue);
+
+/**
+ * Finished AI reviews (so Today's "Needs attention" looks the same) and grading policies. Changes are inserted
+ * in id order and returned in that order, so `changeIds` maps each template change to its copy.
+ */
+async function copyReviewsAndPolicies(
+  tx: Prisma.TransactionClient,
+  from: string,
+  userId: string,
+  scrub: ReturnType<typeof identityScrubber>,
+  course: (id: number) => number,
+  changeIds: Map<number, number | undefined>,
+): Promise<void> {
+  const reviews = await tx.changeReview.findMany({ where: { userId: from, status: { in: ["READY", "SUPPRESSED"] } }, orderBy: { id: "asc" } });
+  await tx.changeReview.createMany({
+    data: reviews.flatMap(({ id: _id, userId: _owner, createdAt: _created, updatedAt: _updated, changeEventId, ...review }) => {
+      const copy = changeIds.get(changeEventId);
+      if (copy === undefined) return [];
+      // Filters are not copied, so the rule a review matched or proposed means nothing in the preview.
+      return [{ ...review, userId, changeEventId: copy, context: asJson(scrub.json(review.context)) ?? {}, matchedRule: undefined, ruleFeedback: undefined, reason: scrub.optional(review.reason) }];
+    }),
+  });
+  const policies = await tx.coursePolicy.findMany({ where: { userId: from } });
+  await tx.coursePolicy.createMany({
+    data: policies.map(({ courseId, userId: _owner, groups, ...policy }) => ({
+      ...policy,
+      courseId: course(courseId),
+      userId,
+      groups: asJson(scrub.json(groups)) ?? [],
+    })),
+  });
+}
 
 /** Copies the template's courses, tasks, files, changes, calendar and settings to `userId`, scrubbed. */
 async function copyAccount(tx: Prisma.TransactionClient, template: User, userId: string): Promise<void> {
@@ -252,7 +286,8 @@ async function copyAccount(tx: Prisma.TransactionClient, template: User, userId:
 
   // Created oldest first: the feed is ordered by id.
   const changes = await tx.changeEvent.findMany({ where: { userId: from }, orderBy: { id: "asc" } });
-  await tx.changeEvent.createMany({
+  const changeCopies = await tx.changeEvent.createManyAndReturn({
+    select: { id: true },
     data: changes.map(({ id: _id, userId: _owner, before, after, ...change }) => {
       const sourceItemId = itemIds.get(change.sourceItemId);
       if (sourceItemId === undefined) throw new Error("preview copy: a change refers to an item that was not copied");
@@ -262,11 +297,13 @@ async function copyAccount(tx: Prisma.TransactionClient, template: User, userId:
         courseId: course(change.courseId),
         sourceItemId,
         summary: scrub.text(change.summary),
+        aiSummary: scrub.optional(change.aiSummary),
         before: asJson(scrub.json(before)),
         after: asJson(scrub.json(after)),
       };
     }),
   });
+  await copyReviewsAndPolicies(tx, from, userId, scrub, course, new Map(changes.map((change, index) => [change.id, changeCopies[index]?.id])));
 
   const sources = await tx.calendarSource.findMany({ where: { userId: from }, orderBy: { id: "asc" } });
   const sourceIds = new Map<number, number>();

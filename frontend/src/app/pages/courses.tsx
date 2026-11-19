@@ -8,6 +8,7 @@ import { CourseCard, FileTable, GroupedTasks } from "../lists";
 import { useArchiveCourse, useCourse, useCourses, useFiles, useTasks } from "../queries";
 import { useNow } from "../shell";
 import { CourseSyllabus } from "../syllabus";
+import { GradingPolicy } from "../important";
 import { useTaskEditor } from "../tasks";
 import { useToast } from "../toast";
 import { Alert, EmptyState, LoadMoreButton, PageHeader, QueryError, SkeletonList, Spinner, usePages } from "../ui";
@@ -248,6 +249,7 @@ export function CourseDetailPage() {
         {tab === "files" ? <CourseFiles courseId={data.id} /> : null}
         {tab === "syllabus" ? <CourseSyllabus courseId={data.id} /> : null}
       </section>
+      <GradingPolicy courseId={data.id} />
     </div>
   );
 }

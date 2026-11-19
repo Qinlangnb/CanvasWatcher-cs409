@@ -21,6 +21,7 @@ import {
   useUpdateSettings,
 } from "../queries";
 import { useNow } from "../shell";
+import { ChangeFiltersSection } from "../important";
 import { useToast } from "../toast";
 import type { CalendarSource, PlanSettings } from "../types";
 import { Alert, Badge, Dialog, PageHeader, PasswordField, QueryError, SelectField, SkeletonList, Spinner } from "../ui";
@@ -576,6 +577,7 @@ export function SettingsPage() {
         <CanvasSection />
         <ProfileSection />
         {preview ? null : <PasswordSection />}
+        <ChangeFiltersSection />
       </div>
     </div>
   );

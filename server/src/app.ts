@@ -20,6 +20,10 @@ import { syncRouter } from "./routes/sync.js";
 import { tasksRouter } from "./routes/tasks.js";
 import { todayRouter } from "./routes/today.js";
 import { usersRouter } from "./routes/users.js";
+import { changeFiltersRouter } from "./routes/changeFilters.js";
+import { changeReviewRouter } from "./routes/changeReview.js";
+import { coursePolicyRouter } from "./routes/coursePolicy.js";
+import { notificationsRouter } from "./routes/notifications.js";
 import type { Services } from "./services.js";
 
 export interface AppDependencies {
@@ -60,6 +64,11 @@ export function createApp({ config, db, logger, services }: AppDependencies): Ex
   // Everything below belongs to the signed-in user and is always queried with their id.
   app.use("/api/canvas", requireUser, canvasRouter(db, config, services));
   app.use("/api/sync", requireUser, syncRouter(db, services));
+  // Important Changes parity: grading policy, AI review, noise filters and banners. Mounted before the routers they extend.
+  app.use("/api/courses", requireUser, coursePolicyRouter(db));
+  app.use("/api/changes", requireUser, changeReviewRouter(db, services));
+  app.use("/api/settings/change-filters", requireUser, changeFiltersRouter(db));
+  app.use("/api/notifications", requireUser, notificationsRouter(db));
   app.use("/api/courses", requireUser, coursesRouter(db, services));
   app.use("/api/tasks", requireUser, tasksRouter(db));
   app.use("/api/files", requireUser, filesRouter(db, services));

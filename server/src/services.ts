@@ -1,5 +1,7 @@
 import type { Logger } from "pino";
 import { OpenAiCompatibleProvider, type AiProvider } from "./ai/provider.js";
+import { aiProviderFor } from "./ai/resolve.js";
+import { ChangeReviewWorker } from "./changes/review.js";
 import { CanvasClient, type CanvasClientFactory } from "./canvas/client.js";
 import type { Config } from "./config.js";
 import type { Db } from "./db.js";
@@ -12,6 +14,8 @@ export interface Services {
   sync: SyncService;
   /** AI Chat's provider; null when no key is configured. */
   ai: AiProvider | null;
+  /** Runs the AI review of Important Changes (changes/review.ts). */
+  reviews: ChangeReviewWorker;
 }
 
 export interface ServiceOptions {
@@ -27,10 +31,13 @@ export interface ServiceOptions {
 export function createServices({ config, db, logger, canvas, ai }: ServiceOptions): Services {
   const secrets = new SecretBox(config.credentialsKey);
   const factory = canvas ?? ((baseUrl, token) => new CanvasClient({ baseUrl, token }));
-  return {
+  const services: Services = {
     secrets,
     canvas: factory,
     sync: new SyncService({ db, logger, secrets, canvas: factory }),
     ai: ai !== undefined ? ai : config.ai ? new OpenAiCompatibleProvider(config.ai) : null,
+    // The provider is looked up per user at review time, so a user who adds an AI later is picked up.
+    reviews: new ChangeReviewWorker(db, logger, (userId) => aiProviderFor(db, services, userId)),
   };
+  return services;
 }

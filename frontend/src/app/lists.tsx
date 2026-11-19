@@ -21,7 +21,7 @@ import { ChevronRightIcon, ClipboardIcon, DownloadIcon, FileIcon, MegaphoneIcon 
 import { useChange, useIsPreview, useMarkRead, usePlanZone } from "./queries";
 import { TaskCard } from "./taskCard";
 import { TaskCheck, useTaskEditor } from "./tasks";
-import type { Change, ChangeKind, ContentValue, Course, CourseFile, Task } from "./types";
+import type { Change, ChangeDetail, ChangeKind, ContentValue, Course, CourseFile, Task } from "./types";
 import { Badge, Dialog, QueryError, SkeletonList } from "./ui";
 
 // --- Courses ---
@@ -218,7 +218,6 @@ const KIND_ICONS: Record<ChangeKind, typeof FileIcon> = {
   announcement: MegaphoneIcon,
 };
 
-const KIND_LABELS: Record<ChangeKind, string> = { assignment: "Assignment", file: "File", announcement: "Announcement" };
 
 function dayHeading(iso: string, now: Date): string {
   const offset = dayOffset(new Date(iso), now);
@@ -254,21 +253,22 @@ export function ChangeList({
             {group.items.map((change) => {
               const KindIcon = KIND_ICONS[change.kind];
               return (
-                <li key={change.id} className={`change-row${change.read ? "" : " unread"}`}>
+                <li key={change.id} className={`change-row category-${change.category}${change.read ? "" : " unread"}`}>
                   <span className={`change-icon kind-${change.kind} type-${change.change_type}`} aria-hidden="true">
                     <KindIcon size={18} />
                   </span>
                   <button type="button" className="change-open" onClick={() => onOpen(change.id)}>
                     <span className="change-summary">
                       {change.read ? null : <span className="visually-hidden">Unread: </span>}
-                      {change.summary}
+                      {change.ai_summary ?? change.summary}
                     </span>
                     <span className="change-meta">
+                      <span className={`category-badge category-${change.category}`}>{change.event_label}</span>
                       {showCourse ? <span className="course-chip">{change.course.code}</span> : null}
-                      <span>{KIND_LABELS[change.kind]}</span>
                       <time dateTime={change.detected_at}>{timeAgo(change.detected_at, now)}</time>
                     </span>
                   </button>
+                  <ReadToggle change={change} />
                   {change.read ? null : <span className="unread-dot" aria-hidden="true" />}
                 </li>
               );
@@ -277,6 +277,56 @@ export function ChangeList({
         </section>
       ))}
     </div>
+  );
+}
+
+/** Inline "Mark read" / "Mark unread" on every change row. */
+function ReadToggle({ change }: { change: Change }) {
+  const markRead = useMarkRead();
+  return (
+    <button
+      type="button"
+      className="button small ghost change-read-toggle"
+      disabled={markRead.isPending}
+      onClick={() => markRead.mutate({ id: change.id, read: !change.read })}
+    >
+      {change.read ? "Mark unread" : "Mark read"}
+      <span className="visually-hidden">: {change.summary}</span>
+    </button>
+  );
+}
+
+const SEVERITY_TONES = { low: "neutral", medium: "accent", high: "warning", critical: "danger" } as const;
+
+/** Before and after as text, with the raw values and the app's own bookkeeping folded away. */
+function ChangeSnapshots({ detail }: { detail: ChangeDetail }) {
+  return (
+    <>
+      {detail.before_text || detail.after_text ? (
+        <div className="snapshot-grid">
+          {detail.before_text ? (
+            <section aria-label="Before">
+              <h3>Before</h3>
+              <pre className="snapshot-text">{detail.before_text}</pre>
+            </section>
+          ) : null}
+          {detail.after_text ? (
+            <section aria-label="After">
+              <h3>After</h3>
+              <pre className="snapshot-text">{detail.after_text}</pre>
+            </section>
+          ) : null}
+        </div>
+      ) : null}
+      <details className="raw-metadata">
+        <summary>Raw metadata</summary>
+        <pre>{JSON.stringify({ before: detail.before, after: detail.after }, null, 2)}</pre>
+      </details>
+      <details className="raw-metadata">
+        <summary>Internal metadata</summary>
+        <pre>{JSON.stringify({ ...detail.internals, review: detail.review }, null, 2)}</pre>
+      </details>
+    </>
   );
 }
 
@@ -308,13 +358,21 @@ export function ChangeDialog({ id, onClose }: { id: number | null; onClose: () =
           <Badge tone={detail.change_type === "removed" ? "danger" : detail.change_type === "created" ? "success" : "accent"}>
             {detail.change_type === "created" ? "New" : detail.change_type === "removed" ? "Removed" : "Updated"}
           </Badge>
-          <span>{KIND_LABELS[detail.kind]}</span>
+          <span className={`category-badge category-${detail.category}`}>{detail.event_label}</span>
           <Link to={`/courses/${detail.course.id}`} onClick={onClose}>
             {detail.course.code}
           </Link>
           <span>Detected {formatDateTime(detail.detected_at)}</span>
         </p>
         <p className="change-detail-summary">{detail.summary}</p>
+        {detail.review?.status === "ready" ? (
+          <div className="change-review">
+            {detail.review.severity ? <Badge tone={SEVERITY_TONES[detail.review.severity]}>{detail.review.severity}</Badge> : null}
+            <span>
+              AI review: {detail.review.notify_user ? "worth your attention." : "no action needed."} {detail.review.reason}
+            </span>
+          </div>
+        ) : null}
         {fields.length > 0 ? (
           <table className="diff-table">
             <caption className="visually-hidden">What changed</caption>
@@ -342,6 +400,7 @@ export function ChangeDialog({ id, onClose }: { id: number | null; onClose: () =
             </tbody>
           </table>
         ) : null}
+        <ChangeSnapshots detail={detail} />
         {detail.related_task ? (
           <div className="related-task">
             <h3>Assignment</h3>
