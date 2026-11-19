@@ -475,30 +475,76 @@ function PasswordSection() {
   );
 }
 
+/**
+ * Settings has four tabs, as in the original app. The URL hash names a section (#canvas, #sources,
+ * #calendars...), so old deep links still land on the right tab and scroll to their section.
+ */
+const SETTINGS_TABS = [
+  { id: "general", label: "General", first: "study-plan", sections: ["study-plan", "profile", "password"] },
+  { id: "sources", label: "Sources", first: "sources", sections: ["sources", "canvas"] },
+  { id: "calendar", label: "Calendar", first: "availability", sections: ["availability", "commute", "calendars", "agenda"] },
+  { id: "ai", label: "AI and changes", first: "ai", sections: ["ai", "change-filters"] },
+] as const;
+
+type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
+
+function tabFor(hash: string, search: string): SettingsTab {
+  const section = hash.slice(1);
+  const found = SETTINGS_TABS.find((tab) => tab.id === section || (tab.sections as readonly string[]).includes(section));
+  if (found) return found.id;
+  // The sidebar's Manage button opens a source's editor with ?edit=<id>.
+  return new URLSearchParams(search).has("edit") ? "sources" : "general";
+}
+
 export function SettingsPage() {
   const location = useLocation();
   const preview = useIsPreview();
+  const tab = tabFor(location.hash, location.search);
   useEffect(() => {
     // #canvas is handled by its section, which may first open the token form (never in a preview).
-    if (location.hash && (location.hash !== "#canvas" || preview)) {
-      document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: "start" });
+    const section = location.hash.slice(1);
+    if (section && !SETTINGS_TABS.some((item) => item.id === section) && (section !== "canvas" || preview)) {
+      document.getElementById(section)?.scrollIntoView({ block: "start" });
     }
   }, [location.hash, preview]);
   return (
     <div className="page">
-      <PageHeader title="Settings" description="Your study plan, calendars, account, sources, the Canvas connection and AI." />
+      <PageHeader title="Settings" description="Your study plan, sources and sign-in, calendars and availability, AI and change filters." />
+      <nav className="tabs settings-tabs" aria-label="Settings sections">
+        {SETTINGS_TABS.map((item) => (
+          <Link key={item.id} to={{ hash: item.id === "general" ? "" : item.id }} aria-current={item.id === tab ? "page" : undefined} replace>
+            {item.label}
+          </Link>
+        ))}
+      </nav>
       <div className="settings-grid">
-        <StudyPlanSection />
-        <AvailabilitySection />
-        <CommuteSection />
-        <CalendarsSection />
-        <AgendaSection />
-        <SourcesSection />
-        <CanvasSection />
-        <AiSettingsSection />
-        <ProfileSection />
-        {preview ? null : <PasswordSection />}
-        <ChangeFiltersSection />
+        {tab === "general" ? (
+          <>
+            <StudyPlanSection />
+            <ProfileSection />
+            {preview ? null : <PasswordSection />}
+          </>
+        ) : null}
+        {tab === "sources" ? (
+          <>
+            <SourcesSection />
+            <CanvasSection />
+          </>
+        ) : null}
+        {tab === "calendar" ? (
+          <>
+            <AvailabilitySection />
+            <CommuteSection />
+            <CalendarsSection />
+            <AgendaSection />
+          </>
+        ) : null}
+        {tab === "ai" ? (
+          <>
+            <AiSettingsSection />
+            <ChangeFiltersSection />
+          </>
+        ) : null}
       </div>
     </div>
   );

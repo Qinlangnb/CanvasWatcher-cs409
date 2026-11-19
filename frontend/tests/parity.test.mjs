@@ -146,7 +146,8 @@ test("new pieces fit a phone and use the theme tokens", () => {
   };
   assert.equal(decls(".swimlane-viewport")["max-width"], "100%");
   assert.equal(decls(".swimlane-viewport")["overflow"], "auto");
-  assert.equal(decls(".swimlane-viewport")["height"], "min(650px, 65vh)");
+  // As tall as the lanes need, never more than most of the screen.
+  assert.equal(decls(".swimlane-viewport")["max-height"], "min(650px, 65vh)");
   assert.equal(decls(".swimlane-viewport", "(pointer: fine)")["touch-action"], "none");
   assert.equal(decls(".working-banner")["flex-wrap"], "wrap");
   assert.equal(decls(".assignment-files select")["min-width"], "0");
