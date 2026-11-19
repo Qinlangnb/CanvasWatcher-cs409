@@ -17,9 +17,16 @@ import {
   type TrackedItem,
 } from "../canvas/normalize.js";
 import type { CanvasAssignment, CanvasCourse, CanvasFile } from "../canvas/types.js";
+import { gradeChange, previousGrades, recordGradeChanges, type GradeChange } from "../changes/grades.js";
+import { saveChanges, type NewChange } from "../changes/review.js";
+import { savePolicy } from "../courses/policy.js";
 import type { Db } from "../db.js";
 import type { Prisma, SyncRun } from "../generated/prisma/client.js";
 import type { ChangeType, ItemKind, SourceHealth, SyncStatus, SyncTrigger } from "../generated/prisma/enums.js";
+// Tasks parity: past-term courses, assignment attachments and file types.
+import { shouldArchiveNewCourse } from "../courses/terms.js";
+import { detectFileType } from "../files/types.js";
+import { assignmentLinks, saveTaskFileLinks } from "./attachments.js";
 
 const DAY = 24 * 60 * 60_000;
 /** How long a sync may run without renewing its lease before another may take over. */
@@ -334,25 +341,33 @@ export class SyncService {
     const existing = await this.db.course.findUnique({ where: { userId_canvasId: { userId, canvasId } } });
     const course = existing
       ? await this.db.course.update({ where: { id: existing.id }, data: fields })
-      : await this.db.course.create({ data: { userId, canvasId, ...fields } });
+      : await this.db.course.create({
+          // A course first seen after its term ended (an old enrollment) starts archived.
+          data: { userId, canvasId, ...fields, archivedAt: shouldArchiveNewCourse(fields.termEndAt, now) ? now : null },
+        });
     // The first sync of a course records what exists without reporting all of it as new.
     const baseline = !existing;
 
-    const [assignments, files, announcements] = await Promise.all([
+    const [assignments, files, announcements, groups] = await Promise.all([
       this.section(context, fields.courseCode, "assignment", "Assignments", () => client.assignments(canvasId)),
       this.section(context, fields.courseCode, "file", "Files", () => client.files(canvasId)),
       this.section(context, fields.courseCode, "announcement", "Announcements", () =>
         client.announcements(canvasId, new Date(now.getTime() - ANNOUNCEMENT_WINDOW_MS), new Date(now.getTime() + DAY)),
       ),
+      // Grading policy; a course that hides it is simply left without one.
+      this.section(context, fields.courseCode, "assignment_group", "Assignment groups", () => client.assignmentGroups(canvasId)),
     ]);
 
     const result: CourseResult = { changes: 0, problems: [] };
     const scope = { userId, courseId: course.id, baseline, now };
+    const links = assignments.ok ? assignmentLinks(assignments.rows, canvasId, baseUrl) : null;
     if (assignments.ok) {
       result.changes += await this.db.$transaction(
         async (tx) => {
-          await this.saveTasks(tx, scope, assignments.rows);
-          return this.reconcile(tx, scope, "ASSIGNMENT", assignments.rows.map(trackedAssignment), true);
+          const grades = await this.saveTasks(tx, scope, assignments.rows);
+          await saveTaskFileLinks(tx, userId, course.id, links?.byAssignment ?? new Map());
+          const changes = await this.reconcile(tx, scope, "ASSIGNMENT", assignments.rows.map(trackedAssignment), true);
+          return changes + (await recordGradeChanges(tx, scope, grades));
         },
         { timeout: 30_000 },
       );
@@ -360,7 +375,7 @@ export class SyncService {
     if (files.ok) {
       result.changes += await this.db.$transaction(
         async (tx) => {
-          await this.saveFiles(tx, scope, files.rows);
+          await this.saveFiles(tx, scope, files.rows, links?.contextTitles);
           return this.reconcile(tx, scope, "FILE", files.rows.map((file) => trackedFile(file, fields.htmlUrl)), true);
         },
         { timeout: 30_000 },
@@ -373,6 +388,7 @@ export class SyncService {
         { timeout: 30_000 },
       );
     }
+    if (groups.ok) await savePolicy(this.db, userId, course.id, canvasCourse.apply_assignment_group_weights === true, groups.rows, now);
     for (const section of [assignments, files, announcements]) {
       if (!section.ok && section.problem) result.problems.push(`${fields.courseCode} ${section.problem}`);
     }
@@ -399,8 +415,11 @@ export class SyncService {
     }
   }
 
-  private async saveTasks(tx: Prisma.TransactionClient, scope: Scope, rows: CanvasAssignment[]): Promise<void> {
+  /** Saves the course's Canvas tasks and returns the grades that appeared or changed since the last sync. */
+  private async saveTasks(tx: Prisma.TransactionClient, scope: Scope, rows: CanvasAssignment[]): Promise<GradeChange[]> {
     const { userId, courseId, now } = scope;
+    const previous = await previousGrades(tx, courseId);
+    const grades: GradeChange[] = [];
     for (const assignment of rows) {
       const canvasId = String(assignment.id);
       const title = assignment.name?.trim() || "Untitled assignment";
@@ -422,20 +441,25 @@ export class SyncService {
         create: { userId, courseId, canvasId, ...data },
         update: data,
       });
+      const grade = gradeChange(canvasId, title, previous.get(canvasId), data);
+      if (grade) grades.push(grade);
     }
     // Only Canvas tasks can disappear from Canvas; the student's own tasks are never touched.
     await tx.task.updateMany({
       where: { courseId, source: "CANVAS", removedAt: null, canvasId: { notIn: rows.map((row) => String(row.id)) } },
       data: { removedAt: now },
     });
+    return grades;
   }
 
-  private async saveFiles(tx: Prisma.TransactionClient, scope: Scope, rows: CanvasFile[]): Promise<void> {
+  private async saveFiles(tx: Prisma.TransactionClient, scope: Scope, rows: CanvasFile[], contextTitles?: Map<string, string[]>): Promise<void> {
     const { userId, courseId, now } = scope;
     for (const file of rows) {
       const canvasId = String(file.id);
+      const displayName = file.display_name?.trim() || file.filename || "Untitled file";
       const data = {
-        displayName: file.display_name?.trim() || file.filename || "Untitled file",
+        displayName,
+        detectedType: detectFileType(`${displayName} ${file.filename ?? ""}`, contextTitles?.get(canvasId)),
         contentType: file["content-type"] ?? null,
         sizeBytes: Math.max(0, Math.min(file.size ?? 0, 2 ** 31 - 1)),
         canvasUpdatedAt: dateOrNull(file.modified_at ?? file.updated_at),
@@ -465,13 +489,15 @@ export class SyncService {
     const known = new Map(
       (await tx.sourceItem.findMany({ where: { courseId, kind } })).map((item) => [item.canvasId, item]),
     );
-    const events: Prisma.ChangeEventCreateManyInput[] = [];
+    const events: NewChange[] = [];
     const fresh: TrackedItem[] = [];
     const record = (sourceItemId: number, title: string, changeType: ChangeType, detail: ChangeDetail) =>
       events.push({
         userId,
         courseId,
         sourceItemId,
+        kind,
+        title,
         changeType,
         fields: detail.fields ?? [],
         summary: changeSummary(kind, changeType, title, detail.fields),
@@ -536,8 +562,8 @@ export class SyncService {
       }
     }
 
-    if (events.length > 0) await tx.changeEvent.createMany({ data: events });
-    return events.length;
+    // Saves them with their taxonomy and queues their review; a transition already reported is skipped.
+    return saveChanges(tx, events);
   }
 }
 

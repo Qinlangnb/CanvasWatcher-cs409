@@ -289,6 +289,8 @@ describe("failover routing", () => {
 describe("sources", () => {
   it("lists the Canvas source with health and diagnostics from the last sync", async () => {
     seedCourse(fakeCanvas);
+    // This course shows its grading policy (an empty one), so a fully readable course has no diagnostics.
+    fakeCanvas.assignmentGroups.set("101", []);
     const ada = await signUp();
     await connectCanvas(ada);
     let [canvas] = (await ada.send("get", "/api/sources")).body;

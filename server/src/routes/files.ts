@@ -8,6 +8,7 @@ import { HttpError } from "../http/errors.js";
 import { idParam, parseQuery } from "../http/params.js";
 import { isPreview, previewUnavailable } from "../preview/accounts.js";
 import type { Services } from "../services.js";
+import { FILE_TYPES } from "../files/types.js";
 import { notConnected } from "./canvas.js";
 import { courseSummarySelect, presentFile } from "./present.js";
 
@@ -17,6 +18,15 @@ const listQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
   /** The `next_cursor` of the previous page. */
   cursor: z.string().max(200).optional(),
+  /** Only files of this type (the student's choice, else the detected one). */
+  type: z.enum(FILE_TYPES).optional(),
+});
+
+const fileType = z.enum(FILE_TYPES, { error: `Choose one of: ${FILE_TYPES.join(", ")}.` });
+const classification = z.object({ type: fileType }).strict();
+const downloadQuery = z.object({
+  /** "1" answers `{ url }` instead of redirecting, so a page can report a missing file first. */
+  link: z.enum(["1"]).optional(),
 });
 
 // Files are listed by Canvas update time, newest first and unknown times last, then by id. A cursor
@@ -59,7 +69,10 @@ export function filesRouter(db: Db, services: Services): Router {
       removedAt: null,
       ...(query.course_id ? { courseId: query.course_id } : { course: { archivedAt: null } }),
       ...(query.q ? { displayName: { contains: query.q, mode: "insensitive" } } : {}),
-      ...(query.cursor ? { AND: [afterCursor(query.cursor)] } : {}),
+      AND: [
+        ...(query.cursor ? [afterCursor(query.cursor)] : []),
+        ...(query.type ? [{ OR: [{ userOverrideType: query.type }, { userOverrideType: null, detectedType: query.type }] }] : []),
+      ],
     };
     const rows = await db.courseFile.findMany({
       where,
@@ -72,10 +85,25 @@ export function filesRouter(db: Db, services: Services): Router {
     res.json({ items: page.map(presentFile), next_cursor: rows.length > query.limit && last ? encodeCursor(last) : null });
   });
 
+  /** Moves a file to another type; the choice survives syncs. */
+  router.patch("/:id/classification", async (req, res) => {
+    const userId = currentAuth(res.locals).user.id;
+    const body = classification.parse(req.body ?? {});
+    const file = await db.courseFile.findFirst({ where: { id: idParam(req.params.id, fileNotFound()), userId, removedAt: null } });
+    if (!file) throw fileNotFound();
+    const updated = await db.courseFile.update({
+      where: { id: file.id },
+      data: { userOverrideType: body.type },
+      include: { course: { select: courseSummarySelect } },
+    });
+    res.json(presentFile(updated));
+  });
+
   /** Redirects to a fresh, short-lived Canvas download link; file contents never pass through this server. */
   router.get("/:id/download", async (req, res) => {
     const { user } = currentAuth(res.locals);
     const userId = user.id;
+    const asLink = parseQuery(downloadQuery, req.query).link === "1";
     const file = await db.courseFile.findFirst({
       where: { id: idParam(req.params.id, fileNotFound()), userId, removedAt: null },
       include: { course: { select: { canvasId: true } } },
@@ -108,6 +136,10 @@ export function filesRouter(db: Db, services: Services): Router {
       await client?.flush();
     }
     if (link.protocol !== "https:") throw new HttpError(502, "CANVAS_UNAVAILABLE", "Canvas returned an unsafe download link.");
+    if (asLink) {
+      res.json({ url: link.toString(), filename: file.displayName });
+      return;
+    }
     res.redirect(302, link.toString());
   });
 

@@ -14,36 +14,53 @@ datasource db {
 }
 
 model User {
-  id                String             @id @default(uuid()) @db.Uuid
+  id                    String                      @id @default(uuid()) @db.Uuid
   /// Display form, as the user typed it.
-  username          String
+  username              String
   /// Lower-cased username; makes sign-in and uniqueness case-insensitive.
-  usernameKey       String             @unique @map("username_key")
+  usernameKey           String                      @unique @map("username_key")
   /// Stored lower-cased.
-  email             String             @unique
-  passwordHash      String             @map("password_hash")
+  email                 String                      @unique
+  passwordHash          String                      @map("password_hash")
   /// Set on preview accounts, which are deleted at this time. Previews have no usable password.
   /// The column keeps its first name, from when previews were sample-data demos.
-  previewExpiresAt  DateTime?          @map("demo_expires_at") @db.Timestamptz(3)
-  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
-  sessions          Session[]
-  canvas            CanvasConnection?
-  syncRuns          SyncRun[]
-  courses           Course[]
-  tasks             Task[]
-  files             CourseFile[]
-  sourceItems       SourceItem[]
-  changes           ChangeEvent[]
-  settings          UserSettings?
-  calendars         CalendarSource[]
-  events            CalendarEvent[]
-  syllabi           CourseSyllabus[]
-  sources           SourceConnection[]
-  canvasCredentials CanvasCredential[]
-  providerSessions  ProviderSession[]
-  authChallenges    AuthChallenge[]
-  oauthStates       CanvasOAuthState[]
+  previewExpiresAt      DateTime?                   @map("demo_expires_at") @db.Timestamptz(3)
+  createdAt             DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(3)
+  sessions              Session[]
+  canvas                CanvasConnection?
+  syncRuns              SyncRun[]
+  courses               Course[]
+  tasks                 Task[]
+  files                 CourseFile[]
+  sourceItems           SourceItem[]
+  changes               ChangeEvent[]
+  settings              UserSettings?
+  calendars             CalendarSource[]
+  events                CalendarEvent[]
+  syllabi               CourseSyllabus[]
+  changeReviews         ChangeReview[]
+  changeFilters         ChangeFilterRule[]
+  filterAudits          ChangeFilterAudit[]
+  notifications         Notification[]
+  coursePolicies        CoursePolicy[]
+  availabilityRules     StudyAvailabilityRule[]
+  availabilityOverrides StudyAvailabilityOverride[]
+  // Tasks parity: work timers, progress history and assignment attachments.
+  workSessions          WorkSession[]
+  taskProgress          TaskProgress[]
+  taskFileLinks         TaskFileLink[]
+  // AI parity: own AI connection, chat history and pending confirmations, task summaries and estimates.
+  aiConnection          AiConnection?
+  aiConversations       AiConversation[]
+  aiConfirmations       AiConfirmation[]
+  aiSummaries           TaskAiSummary[]
+  aiEstimates           TaskAiEstimate[]
+  sources               SourceConnection[]
+  canvasCredentials     CanvasCredential[]
+  providerSessions      ProviderSession[]
+  authChallenges        AuthChallenge[]
+  oauthStates           CanvasOAuthState[]
 
   @@index([previewExpiresAt])
   @@map("users")
@@ -148,28 +165,32 @@ model SyncRun {
 }
 
 model Course {
-  id          Int                @id @default(autoincrement())
-  userId      String             @map("user_id") @db.Uuid
-  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  canvasId    String             @map("canvas_id")
-  courseCode  String             @map("course_code")
-  name        String
-  termName    String?            @map("term_name")
-  termStartAt DateTime?          @map("term_start_at") @db.Timestamptz(3)
-  termEndAt   DateTime?          @map("term_end_at") @db.Timestamptz(3)
-  htmlUrl     String             @map("html_url")
+  id             Int                @id @default(autoincrement())
+  userId         String             @map("user_id") @db.Uuid
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  canvasId       String             @map("canvas_id")
+  courseCode     String             @map("course_code")
+  name           String
+  termName       String?            @map("term_name")
+  termStartAt    DateTime?          @map("term_start_at") @db.Timestamptz(3)
+  termEndAt      DateTime?          @map("term_end_at") @db.Timestamptz(3)
+  htmlUrl        String             @map("html_url")
   /// Set when the user hides the course; sync keeps updating it.
-  archivedAt  DateTime?          @map("archived_at") @db.Timestamptz(3)
+  archivedAt     DateTime?          @map("archived_at") @db.Timestamptz(3)
   /// The last sync that saw this course among the user's active enrollments.
-  lastSeenAt  DateTime           @map("last_seen_at") @db.Timestamptz(3)
-  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt   DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
-  tasks       Task[]
-  files       CourseFile[]
-  sourceItems SourceItem[]
-  changes     ChangeEvent[]
-  syllabus    CourseSyllabus?
-  sources     SourceConnection[]
+  lastSeenAt     DateTime           @map("last_seen_at") @db.Timestamptz(3)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  tasks          Task[]
+  files          CourseFile[]
+  sourceItems    SourceItem[]
+  changes        ChangeEvent[]
+  syllabus       CourseSyllabus?
+  sources        SourceConnection[]
+  policy         CoursePolicy?
+  /// Travel time before and after this course's class events; it is busy, not study time.
+  commuteMinutes Int                @default(0) @map("commute_minutes")
+  events         CalendarEvent[]
 
   @@unique([userId, canvasId])
   @@index([userId, archivedAt])
@@ -187,44 +208,60 @@ enum TaskSource {
 
 /// A Canvas assignment or a task the student added, plus the student's own progress on it.
 model Task {
-  id               Int        @id @default(autoincrement())
-  userId           String     @map("user_id") @db.Uuid
-  user             User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  courseId         Int        @map("course_id")
-  course           Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  source           TaskSource @default(CANVAS)
+  id                   Int             @id @default(autoincrement())
+  userId               String          @map("user_id") @db.Uuid
+  user                 User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId             Int             @map("course_id")
+  course               Course          @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  source               TaskSource      @default(CANVAS)
   /// Null for personal tasks.
-  canvasId         String?    @map("canvas_id")
-  title            String
+  canvasId             String?         @map("canvas_id")
+  title                String
   /// assignment, homework, exam, project or reading, guessed from the title and group.
-  taskType         String     @map("task_type")
-  dueAt            DateTime?  @map("due_at") @db.Timestamptz(3)
-  pointsPossible   Float?     @map("points_possible")
-  htmlUrl          String?    @map("html_url")
+  taskType             String          @map("task_type")
+  dueAt                DateTime?       @map("due_at") @db.Timestamptz(3)
+  pointsPossible       Float?          @map("points_possible")
+  htmlUrl              String?         @map("html_url")
   /// Canvas workflow_state of the submission: unsubmitted, submitted, graded or pending_review.
-  submissionState  String?    @map("submission_state")
-  submittedAt      DateTime?  @map("submitted_at") @db.Timestamptz(3)
-  completedAt      DateTime?  @map("completed_at") @db.Timestamptz(3)
-  ignoredAt        DateTime?  @map("ignored_at") @db.Timestamptz(3)
+  submissionState      String?         @map("submission_state")
+  submittedAt          DateTime?       @map("submitted_at") @db.Timestamptz(3)
+  completedAt          DateTime?       @map("completed_at") @db.Timestamptz(3)
+  ignoredAt            DateTime?       @map("ignored_at") @db.Timestamptz(3)
   /// Set when the assignment disappears from Canvas.
-  removedAt        DateTime?  @map("removed_at") @db.Timestamptz(3)
+  removedAt            DateTime?       @map("removed_at") @db.Timestamptz(3)
   /// Percent done, 0-100, as the student reports it.
-  progress         Int        @default(0)
+  progress             Int             @default(0)
   /// The student's estimate of the total work; null means "use the default for the task type".
-  estimatedMinutes Int?       @map("estimated_minutes")
+  estimatedMinutes     Int?            @map("estimated_minutes")
   /// Minutes the student says they have spent on it so far. With progress, it gives a better
   /// estimate of what is left than the type's default.
-  spentMinutes     Int        @default(0) @map("spent_minutes")
+  spentMinutes         Int             @default(0) @map("spent_minutes")
   /// The student's Canvas score and grade once Canvas shows them; null until graded or while hidden.
-  score            Float?
-  grade            String?
-  excused          Boolean    @default(false)
+  score                Float?
+  grade                String?
+  excused              Boolean         @default(false)
   /// Local date (YYYY-MM-DD) the student started this task before the plan reached it. That day's plan
   /// includes it; on later days the planner decides on its own again.
-  startedOn        String?    @map("started_on") @db.VarChar(10)
-  notes            String?
-  createdAt        DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt        DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  startedOn            String?         @map("started_on") @db.VarChar(10)
+  notes                String?
+  createdAt            DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  // --- Tasks parity: timers, revisions, date-only deadlines (see tasks/work.ts, tasks/progress.ts) ---
+  /// Bumped by every progress, completion or ignore change; writers compare-and-swap on it, so a
+  /// stale tab can't overwrite newer work.
+  stateRevision        Int             @default(0) @map("state_revision")
+  /// Seconds of finished work-timer sessions. Time used is this plus spentMinutes, which is the
+  /// student's manual correction (it may be negative).
+  trackedSeconds       Int             @default(0) @map("tracked_seconds")
+  /// Newest client time a timer heartbeat reported; older heartbeats are ignored.
+  lastClientReportedAt DateTime?       @map("last_client_reported_at") @db.Timestamptz(3)
+  /// The deadline is a day without a time (personal tasks); dueAt is 23:59 local time that day.
+  dueDateOnly          Boolean         @default(false) @map("due_date_only")
+  workSessions         WorkSession[]
+  progressHistory      TaskProgress[]
+  fileLinks            TaskFileLink[]
+  aiSummary            TaskAiSummary?
+  aiEstimate           TaskAiEstimate?
 
   @@unique([courseId, canvasId])
   @@index([userId, dueAt])
@@ -233,19 +270,23 @@ model Task {
 
 /// Metadata of a Canvas course file. Contents are fetched from Canvas when downloaded.
 model CourseFile {
-  id              Int       @id @default(autoincrement())
-  userId          String    @map("user_id") @db.Uuid
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  courseId        Int       @map("course_id")
-  course          Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  canvasId        String    @map("canvas_id")
-  displayName     String    @map("display_name")
-  contentType     String?   @map("content_type")
-  sizeBytes       Int       @map("size_bytes")
-  canvasUpdatedAt DateTime? @map("canvas_updated_at") @db.Timestamptz(3)
-  removedAt       DateTime? @map("removed_at") @db.Timestamptz(3)
-  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id               Int       @id @default(autoincrement())
+  userId           String    @map("user_id") @db.Uuid
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId         Int       @map("course_id")
+  course           Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  canvasId         String    @map("canvas_id")
+  displayName      String    @map("display_name")
+  contentType      String?   @map("content_type")
+  sizeBytes        Int       @map("size_bytes")
+  canvasUpdatedAt  DateTime? @map("canvas_updated_at") @db.Timestamptz(3)
+  /// lecture, homework, discussion, reading, exam, solution or other; set by sync (see files/types.ts).
+  detectedType     String    @default("other") @map("detected_type")
+  /// The student's own choice, which wins over detectedType and survives syncs.
+  userOverrideType String?   @map("user_override_type")
+  removedAt        DateTime? @map("removed_at") @db.Timestamptz(3)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@unique([courseId, canvasId])
   @@index([userId, courseId])
@@ -292,22 +333,37 @@ enum ChangeType {
 }
 
 model ChangeEvent {
-  id           Int        @id @default(autoincrement())
-  userId       String     @map("user_id") @db.Uuid
-  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  courseId     Int        @map("course_id")
-  course       Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  sourceItemId Int        @map("source_item_id")
-  sourceItem   SourceItem @relation(fields: [sourceItemId], references: [id], onDelete: Cascade)
-  changeType   ChangeType @map("change_type")
+  id             Int            @id @default(autoincrement())
+  userId         String         @map("user_id") @db.Uuid
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId       Int            @map("course_id")
+  course         Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  sourceItemId   Int            @map("source_item_id")
+  sourceItem     SourceItem     @relation(fields: [sourceItemId], references: [id], onDelete: Cascade)
+  changeType     ChangeType     @map("change_type")
   /// Names of the content fields that differ, for example ["due_at"].
-  fields       String[]
-  summary      String
-  before       Json?
-  after        Json?
-  detectedAt   DateTime   @default(now()) @map("detected_at") @db.Timestamptz(3)
-  readAt       DateTime?  @map("read_at") @db.Timestamptz(3)
+  fields         String[]
+  summary        String
+  before         Json?
+  after          Json?
+  detectedAt     DateTime       @default(now()) @map("detected_at") @db.Timestamptz(3)
+  readAt         DateTime?      @map("read_at") @db.Timestamptz(3)
+  /// grade, deadline, file, announcement, assignment or content (see changes/taxonomy.ts).
+  category       String         @default("content")
+  /// minor, important or critical.
+  importance     String         @default("minor")
+  requiresAction Boolean        @default(false) @map("requires_action")
+  /// In the default "Important" feed: new files and announcements, grade releases and deadline changes.
+  userFacing     Boolean        @default(false) @map("user_facing")
+  /// SHA-256 of the item, the transition and its before and after values, so one transition is reported once.
+  semanticKey    String?        @map("semantic_key")
+  /// The AI review's reason, once a review approved or rejected the change.
+  aiSummary      String?        @map("ai_summary")
+  review         ChangeReview?
+  notifications  Notification[]
 
+  @@unique([userId, semanticKey])
+  @@index([userId, userFacing, readAt])
   /// The feed is newest first by id (ids grow with detection time), paged with an id cursor.
   @@index([userId, id])
   @@index([userId, readAt])
@@ -333,13 +389,19 @@ model UserSettings {
 
 /// An imported .ics file. Its events are replaced as a whole, never edited one by one.
 model CalendarSource {
-  id         Int             @id @default(autoincrement())
-  userId     String          @map("user_id") @db.Uuid
-  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  name       String
-  fileName   String?         @map("file_name")
-  importedAt DateTime        @default(now()) @map("imported_at") @db.Timestamptz(3)
-  events     CalendarEvent[]
+  id                   Int             @id @default(autoincrement())
+  userId               String          @map("user_id") @db.Uuid
+  user                 User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name                 String
+  fileName             String?         @map("file_name")
+  importedAt           DateTime        @default(now()) @map("imported_at") @db.Timestamptz(3)
+  events               CalendarEvent[]
+  /// SHA-256 of the last imported file; importing the same file again changes nothing.
+  fileSha256           String?         @map("file_sha256")
+  /// The zone floating times were read in: the file's own, or the one the user confirmed.
+  timeZone             String?         @map("time_zone")
+  recurringSeriesCount Int             @default(0) @map("recurring_series_count")
+  lastReimportedAt     DateTime?       @map("last_reimported_at") @db.Timestamptz(3)
 
   @@index([userId])
   @@map("calendar_sources")
@@ -347,25 +409,38 @@ model CalendarSource {
 
 /// One occurrence on the calendar. Recurring imported events are stored expanded.
 model CalendarEvent {
-  id        Int             @id @default(autoincrement())
-  userId    String          @map("user_id") @db.Uuid
-  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id             Int             @id @default(autoincrement())
+  userId         String          @map("user_id") @db.Uuid
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// Null for events the user added by hand.
-  sourceId  Int?            @map("source_id")
-  source    CalendarSource? @relation(fields: [sourceId], references: [id], onDelete: Cascade)
-  title     String
-  location  String?
+  sourceId       Int?            @map("source_id")
+  source         CalendarSource? @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  title          String
+  location       String?
   /// All-day events store UTC midnight of their first day and of the day after their last.
-  startAt   DateTime        @map("start_at") @db.Timestamptz(3)
-  endAt     DateTime        @map("end_at") @db.Timestamptz(3)
-  allDay    Boolean         @default(false) @map("all_day")
+  startAt        DateTime        @map("start_at") @db.Timestamptz(3)
+  endAt          DateTime        @map("end_at") @db.Timestamptz(3)
+  allDay         Boolean         @default(false) @map("all_day")
   /// Busy time is subtracted from the study window when Today plans.
-  busy      Boolean         @default(true)
-  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  busy           Boolean         @default(true)
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  description    String?
+  /// IANA zone the event's wall-clock times and recurrence follow; null means the user's zone.
+  timeZone       String?         @map("time_zone")
+  /// class, busy, personal, study or other. Class events get their course's commute.
+  eventType      String          @default("other") @map("event_type")
+  courseId       Int?            @map("course_id")
+  course         Course?         @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  /// RRULE of a recurring event added by hand; startAt and endAt are its first occurrence.
+  recurrenceRule String?         @map("recurrence_rule")
+  /// Identity inside an imported file (UID, plus the occurrence for recurring events); re-imports match on it.
+  externalId     String?         @map("external_id")
 
+  @@unique([sourceId, externalId])
   @@index([userId, startAt])
   @@index([sourceId])
+  @@index([courseId])
   @@map("calendar_events")
 }
 
@@ -565,4 +640,319 @@ model CanvasOAuthState {
   @@index([userId])
   @@index([expiresAt])
   @@map("canvas_oauth_states")
+}
+
+/// The review of one change (see changes/review.ts). The row doubles as the job the review worker claims:
+/// stage 1 is a fixed prefilter, stage 2 an optional AI decision on whether to tell the student.
+model ChangeReview {
+  id                Int         @id @default(autoincrement())
+  userId            String      @map("user_id") @db.Uuid
+  user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  changeEventId     Int         @unique @map("change_event_id")
+  changeEvent       ChangeEvent @relation(fields: [changeEventId], references: [id], onDelete: Cascade)
+  /// PENDING, WAITING_AI (no AI for this user yet), REVIEWING, READY, SUPPRESSED or FAILED.
+  status            String      @default("PENDING")
+  /// AI_REVIEW or DROP, and why.
+  stage1            String
+  stage1Reason      String      @map("stage1_reason")
+  /// The bounded, academic-only facts the AI sees and filters match against.
+  context           Json
+  matchedRule       Json?       @map("matched_rule")
+  notifyUser        Boolean     @default(false) @map("notify_user")
+  /// low, medium, high or critical, as the AI judged it.
+  severity          String?
+  reason            String?
+  recommendedAction String?     @map("recommended_action")
+  /// What happened to a filter the AI proposed: { rule_id, version } or { error }.
+  ruleFeedback      Json?       @map("rule_feedback")
+  error             String?
+  attempts          Int         @default(0)
+  reviewedAt        DateTime?   @map("reviewed_at") @db.Timestamptz(3)
+  createdAt         DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([status, updatedAt])
+  @@index([userId, status])
+  @@map("change_reviews")
+}
+
+/// A declarative rule that keeps a kind of noise away from AI review. Never a regex or code.
+model ChangeFilterRule {
+  id            Int                 @id @default(autoincrement())
+  userId        String              @map("user_id") @db.Uuid
+  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Hash of the rule's scope and field (its "family"); one rule per family.
+  identityKey   String              @map("identity_key")
+  enabled       Boolean             @default(true)
+  /// Removed rules stay, with their audit history, and can be restored.
+  removed       Boolean             @default(false)
+  /// { course_id, source_type, source_name, change_type, field, operator, pattern }.
+  rule          Json
+  reason        String
+  /// AI or USER.
+  createdBy     String              @map("created_by")
+  version       Int                 @default(1)
+  matchCount    Int                 @default(0) @map("match_count")
+  lastMatchedAt DateTime?           @map("last_matched_at") @db.Timestamptz(3)
+  createdAt     DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
+  audits        ChangeFilterAudit[]
+
+  @@unique([userId, identityKey])
+  @@map("change_filter_rules")
+}
+
+/// Every change to a filter rule, by the AI or the student.
+model ChangeFilterAudit {
+  id        Int              @id @default(autoincrement())
+  userId    String           @map("user_id") @db.Uuid
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ruleId    Int              @map("rule_id")
+  rule      ChangeFilterRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  version   Int
+  /// AI or USER.
+  actor     String
+  /// create, update, enable, disable or remove.
+  action    String
+  reason    String
+  before    Json?
+  after     Json
+  createdAt DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([ruleId, id])
+  @@index([userId])
+  @@map("change_filter_audits")
+}
+
+/// A banner at the top of the app until the student dismisses it.
+model Notification {
+  id            Int          @id @default(autoincrement())
+  userId        String       @map("user_id") @db.Uuid
+  user          User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Set for banners about a change the AI review approved.
+  changeEventId Int?         @map("change_event_id")
+  changeEvent   ChangeEvent? @relation(fields: [changeEventId], references: [id], onDelete: Cascade)
+  /// important or critical.
+  level         String
+  title         String
+  body          String
+  /// The same key is never shown twice, for example `change:12` or `auth-required:canvas`.
+  dedupeKey     String       @map("dedupe_key")
+  dismissedAt   DateTime?    @map("dismissed_at") @db.Timestamptz(3)
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, dismissedAt])
+  @@map("notifications")
+}
+
+/// How a course is graded, from Canvas assignment groups. Canvas is the authority, so it is replaced on every sync.
+model CoursePolicy {
+  courseId  Int      @id @map("course_id")
+  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Canvas `apply_assignment_group_weights`: whether group weights decide the final grade.
+  weighted  Boolean
+  /// [{ id, name, weight, drop_lowest, drop_highest, never_drop }], in Canvas order.
+  groups    Json
+  fetchedAt DateTime @map("fetched_at") @db.Timestamptz(3)
+
+  @@index([userId])
+  @@map("course_policies")
+}
+
+/// Weekly study availability. With any rule saved, Today plans inside these intervals instead of the
+/// single daily study window. Several intervals per weekday are allowed.
+model StudyAvailabilityRule {
+  id          Int     @id @default(autoincrement())
+  userId      String  @map("user_id") @db.Uuid
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// 0 = Monday ... 6 = Sunday.
+  weekday     Int
+  /// Minutes after local midnight; the end is exclusive.
+  startMinute Int     @map("start_minute")
+  endMinute   Int     @map("end_minute")
+  enabled     Boolean @default(true)
+
+  @@index([userId])
+  @@map("study_availability_rules")
+}
+
+/// Replaces the weekly rules on one local date. No intervals means not available that day.
+model StudyAvailabilityOverride {
+  id        Int      @id @default(autoincrement())
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date      DateTime @db.Date
+  /// [{ start: "HH:MM", end: "HH:MM" }]
+  intervals Json
+
+  @@unique([userId, date])
+  @@map("study_availability_overrides")
+}
+
+/// One stretch of a task's work timer. A user has at most one open session (ended_at null); a
+/// partial unique index in the migration enforces it, so starting another task's timer stops this one.
+model WorkSession {
+  id              Int       @id @default(autoincrement())
+  userId          String    @map("user_id") @db.Uuid
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taskId          Int       @map("task_id")
+  task            Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  startedAt       DateTime  @map("started_at") @db.Timestamptz(3)
+  endedAt         DateTime? @map("ended_at") @db.Timestamptz(3)
+  durationSeconds Int?      @map("duration_seconds")
+  /// How the session was recorded; only "timer" so far.
+  source          String    @default("timer")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([taskId, startedAt])
+  @@index([userId, endedAt])
+  @@map("task_work_sessions")
+}
+
+/// Every applied progress or completion change, oldest first; the task row holds the current state.
+model TaskProgress {
+  id         Int      @id @default(autoincrement())
+  userId     String   @map("user_id") @db.Uuid
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taskId     Int      @map("task_id")
+  task       Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  /// When the student made the change (the client's action time), not when it arrived.
+  recordedAt DateTime @map("recorded_at") @db.Timestamptz(3)
+  progress   Int
+  completed  Boolean
+  /// user, heartbeat or reopen.
+  origin     String
+
+  @@index([taskId, recordedAt])
+  @@index([userId])
+  @@map("task_progress")
+}
+
+/// A Canvas file linked from an assignment's description in the same course; offered as
+/// "Download assignment". Kept by Canvas file id, so it resolves to whatever file row sync holds.
+model TaskFileLink {
+  id           Int    @id @default(autoincrement())
+  userId       String @map("user_id") @db.Uuid
+  user         User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  taskId       Int    @map("task_id")
+  task         Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  fileCanvasId String @map("file_canvas_id")
+
+  @@unique([taskId, fileCanvasId])
+  @@index([userId])
+  @@map("task_file_links")
+}
+
+// --- AI parity (settings, chat, summaries, estimates) ---
+
+/// A user's own AI connection from Settings > AI API. Without a verified one the server's AI_API_KEY is used.
+model AiConnection {
+  userId             String    @id @map("user_id") @db.Uuid
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// A preset id from ai/presets.ts; the base URL always comes from the preset, never from the client.
+  provider           String
+  modelId            String    @default("") @map("model_id")
+  /// The provider's API key sealed with CREDENTIALS_KEY (AAD bound to user id and purpose). Never returned.
+  keyCiphertext      String?   @map("key_ciphertext")
+  /// Bumped on every provider, model or key change; a test only counts for the generation it ran against.
+  generation         Int       @default(0)
+  verifiedGeneration Int?      @map("verified_generation")
+  verifiedAt         DateTime? @map("verified_at") @db.Timestamptz(3)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("ai_connections")
+}
+
+model AiConversation {
+  id            String           @id @default(uuid()) @db.Uuid
+  userId        String           @map("user_id") @db.Uuid
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  messages      AiChatMessage[]
+  confirmations AiConfirmation[]
+
+  @@index([userId, updatedAt])
+  @@map("ai_conversations")
+}
+
+model AiChatMessage {
+  id             Int            @id @default(autoincrement())
+  conversationId String         @map("conversation_id") @db.Uuid
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// user or assistant.
+  role           String
+  /// message, confirmation or mutation_result.
+  kind           String         @default("message")
+  content        String
+  toolName       String?        @map("tool_name")
+  /// Evidence cards or the confirmation card shown with the message.
+  payload        Json?
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([conversationId, id])
+  @@map("ai_chat_messages")
+}
+
+/// A change AI Chat proposed. It runs only when its owner confirms it, before it expires.
+model AiConfirmation {
+  id             String         @id @default(uuid()) @db.Uuid
+  userId         String         @map("user_id") @db.Uuid
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversationId String         @map("conversation_id") @db.Uuid
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  toolName       String         @map("tool_name")
+  /// The validated arguments the tool runs with.
+  arguments      Json
+  summary        String
+  /// What the card lists: [{label, value}].
+  details        Json
+  /// PENDING, APPLYING, APPLIED, CANCELLED, EXPIRED or FAILED.
+  status         String         @default("PENDING")
+  result         Json?
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt      DateTime       @map("expires_at") @db.Timestamptz(3)
+  resolvedAt     DateTime?      @map("resolved_at") @db.Timestamptz(3)
+
+  @@index([userId, status])
+  @@index([conversationId])
+  @@map("ai_confirmations")
+}
+
+/// A short AI summary of a Canvas assignment's description, kept while the description and model stay the same.
+model TaskAiSummary {
+  taskId    Int      @id @map("task_id")
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// SHA-256 of the description and model the summary was made from.
+  inputHash String   @map("input_hash")
+  /// PENDING, READY or FAILED.
+  status    String
+  summary   String?
+  attempts  Int      @default(0)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([userId])
+  @@map("task_ai_summaries")
+}
+
+/// An AI estimate of a Canvas task's total work, used when the student gave none.
+model TaskAiEstimate {
+  taskId    Int      @id @map("task_id")
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  inputHash String   @map("input_hash")
+  /// PENDING, READY or FAILED. A previous estimate's minutes stay while a new one is made.
+  status    String
+  minutes   Int?
+  attempts  Int      @default(0)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([userId])
+  @@map("task_ai_estimates")
 }

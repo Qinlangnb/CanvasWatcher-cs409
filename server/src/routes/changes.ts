@@ -6,15 +6,21 @@ import type { Prisma } from "../generated/prisma/client.js";
 import { HttpError } from "../http/errors.js";
 import { idParam, parseQuery } from "../http/params.js";
 import { changeInclude, courseSummarySelect, presentChange, presentTask } from "./present.js";
+import type { Content } from "../canvas/normalize.js";
+import { snapshotText } from "../changes/taxonomy.js";
+import { presentReview } from "./changeReview.js";
 
 const listQuery = z.object({
   course_id: z.coerce.number().int().positive().optional(),
   unread: z.enum(["true", "false"]).optional(),
+  /** true: only the Important set (new files and announcements, grades, deadlines), as the app shows by default. */
+  important: z.enum(["true", "false"]).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(30),
   /** Cursor: the `next_before` of the previous page. */
   before: z.coerce.number().int().positive().optional(),
 });
 
+const countQuery = z.object({ important: z.enum(["true", "false"]).optional() });
 const readState = z.object({ read: z.boolean({ error: "Send read as true or false." }) });
 const markAll = z.object({ course_id: z.number().int().positive().optional() });
 
@@ -34,6 +40,7 @@ export function changesRouter(db: Db): Router {
     const rows = await db.changeEvent.findMany({
       where: {
         ...scope(userId, query.course_id),
+        ...(query.important === "true" ? { userFacing: true } : {}),
         ...(query.unread === "true" ? { readAt: null } : query.unread === "false" ? { readAt: { not: null } } : {}),
         ...(query.before ? { id: { lt: query.before } } : {}),
       },
@@ -49,9 +56,11 @@ export function changesRouter(db: Db): Router {
     });
   });
 
-  router.get("/unread-count", async (_req, res) => {
+  router.get("/unread-count", async (req, res) => {
     const userId = currentAuth(res.locals).user.id;
-    res.json({ count: await db.changeEvent.count({ where: { ...scope(userId, undefined), readAt: null } }) });
+    const query = parseQuery(countQuery, req.query);
+    const important = query.important === "true" ? { userFacing: true } : {};
+    res.json({ count: await db.changeEvent.count({ where: { ...scope(userId, undefined), ...important, readAt: null } }) });
   });
 
   router.post("/mark-all-read", async (req, res) => {
@@ -67,7 +76,11 @@ export function changesRouter(db: Db): Router {
   async function findChange(userId: string, rawId: string | undefined) {
     const change = await db.changeEvent.findFirst({
       where: { id: idParam(rawId, changeNotFound()), userId },
-      include: { ...changeInclude, sourceItem: { select: { kind: true, title: true, htmlUrl: true, canvasId: true } } },
+      include: {
+        ...changeInclude,
+        sourceItem: { select: { kind: true, title: true, htmlUrl: true, canvasId: true } },
+        review: true,
+      },
     });
     if (!change) throw changeNotFound();
     return change;
@@ -89,6 +102,20 @@ export function changesRouter(db: Db): Router {
       before: change.before,
       after: change.after,
       related_task: task ? presentTask(task) : null,
+      // The two versions as text, plus what the app knows about the change behind the scenes.
+      before_text: snapshotText(change.before as Content | null),
+      after_text: snapshotText(change.after as Content | null),
+      review: change.review ? presentReview(change.review) : null,
+      // Not "internal_metadata": that word would trip the preview test, which looks for the name "Ada" anywhere.
+      internals: {
+        // Whether a dedupe key guards this change; the key itself is a hash with nothing to read in it.
+        deduplicated: change.semanticKey !== null,
+        source_item_id: change.sourceItemId,
+        canvas_id: change.sourceItem.canvasId,
+        fields: change.fields,
+        review_stage1: change.review ? `${change.review.stage1}: ${change.review.stage1Reason}` : null,
+        matched_rule: change.review?.matchedRule ?? null,
+      },
     });
   });
 

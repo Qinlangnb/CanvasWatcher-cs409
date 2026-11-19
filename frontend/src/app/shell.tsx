@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, Navigate, NavLink, Outlet, useLocation } from "react-router";
 import { isApiError } from "./api";
 import { AiChat } from "./aiChat";
+import { NotificationBanners } from "./important";
 import { PREVIEW_UNAVAILABLE, PreviewBanner, UnavailableButton } from "./preview";
 import { syncOutcome, timeAgo, type SyncOutcome } from "./format";
 import { AlertIcon, BellIcon, BookIcon, CalendarIcon, CheckIcon, FolderIcon, GearIcon, LogoMark, SunIcon, SyncIcon } from "./icons";
@@ -10,6 +11,7 @@ import { SourcesButton, SourcesList } from "./sources/sidebar";
 import { TaskEditorProvider } from "./tasks";
 import { useToast } from "./toast";
 import { Alert, Spinner, useFocusHeading } from "./ui";
+import { WorkHeartbeat } from "./workTimer";
 
 /** Set on gateway deployments: the account page of the site that hosts CanvasWatcher. */
 const ACCOUNT_URL = ((import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_ACCOUNT_URL ?? "").trim();
@@ -280,6 +282,7 @@ export function AppShell() {
 
         <main id="main" className="main" tabIndex={-1}>
           <PreviewBanner />
+          <NotificationBanners />
           {rejected ? (
             <div className="banner">
               <Alert
@@ -299,6 +302,8 @@ export function AppShell() {
         </main>
 
         <AiChat />
+        {/* Keeps a running work timer checked in from any page. */}
+        <WorkHeartbeat />
 
         <nav className="tabbar" aria-label="Main">
           <ul>

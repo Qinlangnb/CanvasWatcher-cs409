@@ -1,5 +1,5 @@
 import type { SecretBox } from "../security/secretBox.js";
-import type { CanvasAnnouncement, CanvasAssignment, CanvasCourse, CanvasFile, CanvasId, CanvasUser } from "./types.js";
+import type { CanvasAnnouncement, CanvasAssignment, CanvasAssignmentGroup, CanvasCourse, CanvasFile, CanvasId, CanvasUser } from "./types.js";
 
 export type CanvasErrorKind =
   | "TOKEN_REJECTED"
@@ -185,6 +185,11 @@ export class CanvasClient {
       ["include[]", "submission"],
       ["override_assignment_dates", "true"],
     ]);
+  }
+
+  /** Grading categories with their weights and drop rules. */
+  assignmentGroups(courseId: CanvasId): Promise<CanvasAssignmentGroup[]> {
+    return this.getAll(`/api/v1/courses/${id(courseId)}/assignment_groups`);
   }
 
   files(courseId: CanvasId): Promise<CanvasFile[]> {

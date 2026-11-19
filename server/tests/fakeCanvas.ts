@@ -1,5 +1,5 @@
 import { CanvasClient, type CanvasClientFactory } from "../src/canvas/client.js";
-import type { CanvasAnnouncement, CanvasAssignment, CanvasCourse, CanvasFile, CanvasUser } from "../src/canvas/types.js";
+import type { CanvasAnnouncement, CanvasAssignment, CanvasAssignmentGroup, CanvasCourse, CanvasFile, CanvasUser } from "../src/canvas/types.js";
 
 export const CANVAS_ORIGIN = "https://canvas.example.edu";
 /** Fixture token accepted by the fake Canvas; not a real credential. */
@@ -48,6 +48,8 @@ export class FakeCanvas {
   assignments = new Map<string, CanvasAssignment[]>();
   files = new Map<string, CanvasFile[]>();
   announcements = new Map<string, CanvasAnnouncement[]>();
+  /** Assignment groups per course; a course without an entry answers 404, like a hidden grading setup. */
+  assignmentGroups = new Map<string, CanvasAssignmentGroup[]>();
   /** Syllabus tab HTML per course. */
   syllabusBodies = new Map<string, string>();
   pages = new Map<string, FakePage[]>();
@@ -75,6 +77,7 @@ export class FakeCanvas {
     this.assignments.clear();
     this.files.clear();
     this.announcements.clear();
+    this.assignmentGroups.clear();
     this.syllabusBodies.clear();
     this.pages.clear();
     this.modules.clear();
@@ -147,6 +150,11 @@ export class FakeCanvas {
     if (match) return this.page(url, this.modules.get(match[1] as string) ?? []);
     match = /^\/api\/v1\/courses\/([^/]+)\/assignments$/.exec(path);
     if (match) return this.page(url, this.assignments.get(match[1] as string) ?? []);
+    match = /^\/api\/v1\/courses\/([^/]+)\/assignment_groups$/.exec(path);
+    if (match) {
+      const groups = this.assignmentGroups.get(match[1] as string);
+      return groups ? this.page(url, groups) : json({ errors: [{ message: "not found" }] }, 404);
+    }
     match = /^\/api\/v1\/courses\/([^/]+)\/files$/.exec(path);
     if (match) return this.page(url, this.files.get(match[1] as string) ?? []);
     match = /^\/api\/v1\/courses\/([^/]+)\/files\/([^/]+)$/.exec(path);

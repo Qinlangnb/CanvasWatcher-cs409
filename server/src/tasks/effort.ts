@@ -21,24 +21,36 @@ export interface EffortInput {
   taskType: string;
   estimatedMinutes: number | null;
   progress: number;
-  /** Minutes the student reports having spent; 0 when they haven't said. */
+  /** The student's manual correction of time used, in minutes (may be negative); 0 when they haven't said. */
   spentMinutes?: number;
+  /** Seconds of finished work-timer sessions. */
+  trackedSeconds?: number;
+  /** The AI's estimate of the total (ai/insights.ts), when one was made. */
+  aiEstimate?: { minutes: number | null } | null;
 }
 
+/** Time used: finished timer sessions plus the student's manual correction, never below zero. */
+export function usedMinutes(task: Pick<EffortInput, "spentMinutes" | "trackedSeconds">): number {
+  return Math.max(0, Math.round((task.trackedSeconds ?? 0) / 60) + (task.spentMinutes ?? 0));
+}
+
+const aiMinutes = (task: EffortInput) => task.aiEstimate?.minutes ?? null;
+
 export function totalMinutes(task: EffortInput): number {
-  return task.estimatedMinutes ?? defaultMinutes(task.taskType);
+  return task.estimatedMinutes ?? aiMinutes(task) ?? defaultMinutes(task.taskType);
 }
 
 /**
  * Where the remaining time comes from: the pace so far (time used and progress both given), the
- * student's own estimate, or the usual time for the task type.
+ * student's own estimate, the AI's estimate, or the usual time for the task type.
  */
-export type RemainingBasis = "pace" | "estimate" | "default";
+export type RemainingBasis = "pace" | "estimate" | "ai" | "default";
 
 export function remainingBasis(task: EffortInput): RemainingBasis {
   const progress = Math.min(100, Math.max(0, task.progress));
-  if ((task.spentMinutes ?? 0) > 0 && progress > 0 && progress < 100) return "pace";
-  return task.estimatedMinutes === null ? "default" : "estimate";
+  if (usedMinutes(task) > 0 && progress > 0 && progress < 100) return "pace";
+  if (task.estimatedMinutes !== null) return "estimate";
+  return aiMinutes(task) !== null ? "ai" : "default";
 }
 
 /** Rounds to 5 minutes; anything left at all is at least 5 minutes. */
@@ -55,7 +67,7 @@ export function remainingMinutes(task: EffortInput): number {
   const progress = Math.min(100, Math.max(0, task.progress));
   if (progress >= 100) return 0;
   if (remainingBasis(task) === "pace") {
-    return roundFive(((task.spentMinutes ?? 0) * (100 - progress)) / progress);
+    return roundFive((usedMinutes(task) * (100 - progress)) / progress);
   }
   return roundFive(totalMinutes(task) * (1 - progress / 100));
 }

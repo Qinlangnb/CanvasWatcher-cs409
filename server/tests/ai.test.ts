@@ -83,8 +83,8 @@ describe("AI Chat", () => {
   it("is off without a key", async () => {
     const { app } = appWith(null);
     const ada = await adaOn(app);
-    expect((await ada.send("get", "/api/ai")).body).toEqual({ enabled: false, model: null });
-    const res = await ada.send("post", "/api/ai/chat", { body: { messages: [{ role: "user", content: "Hi" }] } });
+    expect((await ada.send("get", "/api/ai")).body).toEqual({ enabled: false, model: null, source: null });
+    const res = await ada.send("post", "/api/ai/chat", { body: { message: "Hi" } });
     expect(res.status).toBe(503);
     expect(res.body.code).toBe("AI_DISABLED");
   });
@@ -106,13 +106,14 @@ describe("AI Chat", () => {
     ]);
     const { app } = appWith(ai);
     const ada = await adaOn(app);
-    expect((await ada.send("get", "/api/ai")).body).toEqual({ enabled: true, model: "scripted" });
+    expect((await ada.send("get", "/api/ai")).body).toEqual({ enabled: true, model: "scripted", source: "server" });
 
     const res = await ada.send("post", "/api/ai/chat", {
-      body: { messages: [{ role: "user", content: "How am I doing in CS 409?" }], page: { path: "/today", course_id: null } },
+      body: { message: "How am I doing in CS 409?", page: { path: "/today", course_id: null } },
     });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ message: "MP 1 got **92/100**; MPs are 40% of the grade.", tools_used: ["list_courses", "get_course_syllabus", "list_tasks"] });
+    expect(res.body).toMatchObject({ message: "MP 1 got **92/100**; MPs are 40% of the grade.", tools_used: ["list_courses", "get_course_syllabus", "list_tasks"], confirmation: null });
+    expect(res.body.tool_results).toEqual([expect.objectContaining({ title: "CS 409 syllabus", route: expect.stringMatching(/^\/courses\/\d+$/) })]);
 
     const [first, , third] = ai.calls;
     expect(first?.tools.map((tool) => tool.function.name)).toEqual(
@@ -139,7 +140,7 @@ describe("AI Chat", () => {
     const ai = new ScriptedAi(steps);
     const { app } = appWith(ai);
     const ada = await adaOn(app);
-    const res = await ada.send("post", "/api/ai/chat", { body: { messages: [{ role: "user", content: "Look around" }] } });
+    const res = await ada.send("post", "/api/ai/chat", { body: { message: "Look around" } });
     expect(res.body.message).toBe("Here is what I found.");
     const second = ai.calls[1]?.messages.find((message) => message.role === "tool") as { content: string };
     expect(second.content).toContain("task_id");
@@ -154,7 +155,7 @@ describe("AI Chat", () => {
     await adaOn(app);
     const bob = new Browser(app);
     await bob.send("post", "/api/users", { body: { username: "bob", email: "bob@example.com", password: "test-password-123" } });
-    await bob.send("post", "/api/ai/chat", { body: { messages: [{ role: "user", content: "My tasks?" }] } });
+    await bob.send("post", "/api/ai/chat", { body: { message: "My tasks?" } });
     const result = ai.calls[1]?.messages.find((message) => message.role === "tool") as { content: string };
     expect(JSON.parse(result.content)).toEqual({ count: 0, tasks: [] });
   });
@@ -167,15 +168,15 @@ describe("AI Chat", () => {
     ]);
     const { app } = appWith(ai);
     const ada = await adaOn(app);
-    const res = await ada.send("post", "/api/ai/chat", { body: { messages: [{ role: "user", content: "Hi" }] } });
+    const res = await ada.send("post", "/api/ai/chat", { body: { message: "Hi" } });
     expect(res.status).toBe(503);
     expect(res.body).toMatchObject({ code: "AI_RATE_LIMITED" });
   });
 
-  it("rejects a conversation that does not end with the student's message", async () => {
+  it("rejects an empty message", async () => {
     const { app } = appWith(new ScriptedAi([]));
     const ada = await adaOn(app);
-    const res = await ada.send("post", "/api/ai/chat", { body: { messages: [{ role: "assistant", content: "Hi" }] } });
+    const res = await ada.send("post", "/api/ai/chat", { body: { message: "   " } });
     expect(res.status).toBe(422);
   });
 });

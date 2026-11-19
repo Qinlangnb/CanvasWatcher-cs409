@@ -6,7 +6,7 @@ import type { Db } from "../db.js";
 import type { CanvasConnection, CanvasCredential, Prisma } from "../generated/prisma/client.js";
 import type { CanvasAuthMethod, CredentialState } from "../generated/prisma/enums.js";
 import { HttpError } from "../http/errors.js";
-import { notify } from "../notifications/notify.js";
+import { notify, resolveNotice } from "../notifications/notify.js";
 import type { SecretBox } from "../security/secretBox.js";
 import { CanvasClient, CanvasError, PROFILE_PATH, type CanvasAuth, type CanvasClientFactory } from "./client.js";
 import { exchangeOAuth, OAuthError } from "./oauth.js";
@@ -75,6 +75,10 @@ export interface InstallOptions {
   /** The slot generation the caller saw; a different one means the slot changed meanwhile. */
   expectedGeneration?: number;
 }
+
+/** One "authentication required" episode: from the last successful verification until the next one. */
+export const authRequiredKey = (binding: Pick<CanvasConnection, "verifiedAt">) => `auth-required:canvas:${binding.verifiedAt.getTime()}`;
+const EXPIRY_STATES: ExpirationState[] = ["warning", "urgent", "critical", "expired"];
 
 export const accountMismatch = () =>
   new HttpError(409, "account_mismatch", "That credential signs in to a different Canvas account or site. The current one was kept.");
@@ -203,6 +207,11 @@ export class CanvasCredentials {
         create: { userId, method, ...fields },
         update: fields,
       });
+      // Signing in again takes down the "authentication required" banner, and a new PAT its expiry banners.
+      if (binding) await resolveNotice(tx, userId, authRequiredKey(binding));
+      if (method === "PAT" && current) {
+        for (const state of EXPIRY_STATES) await resolveNotice(tx, userId, `canvas-pat-expiry:${current.generation}:${state}`);
+      }
       const displayName = options.account.name ?? options.account.short_name ?? binding?.displayName ?? "";
       await tx.canvasConnection.upsert({
         where: { userId },
@@ -262,10 +271,10 @@ export class CanvasCredentials {
     await this.db.sourceConnection.updateMany({ where: { userId, type: "CANVAS" }, data: { state: "AUTH_REQUIRED", health: "AUTH_REQUIRED" } });
     // A sign-out the user asked for needs no notice.
     if (changed.count === 0 || options.quiet) return;
-    const rows = [...(await this.rows(userId)).values()];
-    const generations = rows.reduce((sum, row) => sum + row.generation, 0);
+    const binding = await this.db.canvasConnection.findUnique({ where: { userId } });
+    if (!binding) return;
     await notify(this.db, userId, {
-      key: `canvas-auth-required:${generations}`,
+      key: authRequiredKey(binding),
       level: "critical",
       title: "Canvas authentication required",
       body: "Canvas no longer accepts any saved sign-in, so your courses are not updating. Sign in again in Settings → Sources.",

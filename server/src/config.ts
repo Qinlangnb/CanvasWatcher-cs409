@@ -57,6 +57,11 @@ const environment = z.object({
     .refine((value) => /^https?:\/\/[^\s/?#]+(?:\/[^\s?#]*)?$/.test(value), "AI_BASE_URL must be an http(s) URL without a query"),
   AI_MODEL: z.string().trim().min(1).max(100).default("deepseek-flash"),
   /**
+   * Lets users pick a local Ollama in Settings > AI API. Off by default: on a hosted server those
+   * addresses reach into the server's own network.
+   */
+  AI_ALLOW_LOCAL: z.enum(["true", "false"]).default("false"),
+  /**
    * The desktop Auth Broker the browser talks to for browser sign-in (see auth-broker/). It always runs
    * on the student's own computer, so this is a loopback address.
    */
@@ -92,6 +97,8 @@ export interface Config {
   previewSource: string | null;
   /** AI Chat's provider, or null when it is off. */
   ai: AiConfig | null;
+  /** Whether users may choose a local Ollama as their own AI provider. */
+  aiAllowLocal: boolean;
   /** PUBLIC_BASE_PATH without a trailing slash; "" at the site root. */
   basePath: string;
   authBrokerUrl: string;
@@ -165,6 +172,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     ai: values.AI_API_KEY
       ? { baseUrl: values.AI_BASE_URL.replace(/\/+$/, ""), apiKey: values.AI_API_KEY, model: values.AI_MODEL }
       : null,
+    aiAllowLocal: values.AI_ALLOW_LOCAL === "true",
     basePath,
     authBrokerUrl: values.AUTH_BROKER_URL,
     canvasOAuth:
