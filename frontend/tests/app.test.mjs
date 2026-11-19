@@ -254,15 +254,50 @@ test("sync shows its result: a toast, the button, the status line and a dot on t
   assert.ok(warnDot, "partial syncs have their own dot colour");
 });
 
-test("AI Chat shows only when the server has it, renders Markdown without HTML or images, and sends Enter", () => {
+test("AI Chat shows only when AI is available, loads its drawer lazily and keeps the conversation on the server", () => {
   const chat = read("app/aiChat.tsx");
+  const drawer = read("app/aiChatDrawer.tsx");
   const shell = read("app/shell.tsx");
   assert.match(shell, /<AiChat \/>/);
   assert.match(chat, /if \(!status\.data\?\.enabled\) return null;/);
-  assert.match(chat, /skipHtml disallowedElements=\{\["img"\]\}/);
-  assert.match(chat, /event\.key === "Enter" && !event\.shiftKey && !event\.nativeEvent\.isComposing/);
-  assert.match(chat, /messages: conversation\.slice\(-SENT_MESSAGES\)/);
-  assert.match(chat, /sessionStorage/);
+  assert.match(chat, /lazy\(\(\) => import\("\.\/aiChatDrawer"\)\)/);
+  assert.match(chat, /Loading AI Chat…/);
+  assert.match(drawer, /event\.key === "Enter" && !event\.shiftKey && !event\.nativeEvent\.isComposing/);
+  // Only the id is kept in the browser; the messages come from the server.
+  assert.match(drawer, /localStorage\.setItem\(storageKey\(userId\), id\)/);
+  assert.match(drawer, /conversation_id: conversationId, message: content/);
+  assert.doesNotMatch(drawer, /sessionStorage/);
+});
+
+test("AI Chat renders math safely, never loads images or HTML, and asks before any change", () => {
+  const markdown = read("app/chatMarkdown.tsx");
+  const drawer = read("app/aiChatDrawer.tsx");
+  const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  // Exact versions, so a renderer update is a deliberate change.
+  for (const name of ["katex", "rehype-katex", "remark-math"]) assert.match(pkg.dependencies[name], /^\d+\.\d+\.\d+$/);
+  assert.match(markdown, /trust: false/);
+  assert.match(markdown, /maxExpand: 200, maxSize: 20/);
+  assert.match(markdown, /skipHtml/);
+  assert.match(markdown, /\[Image omitted\{alt \? `: \$\{alt\}` : ""\}\]/);
+  assert.match(drawer, /Confirmation required/);
+  assert.match(drawer, /act\("confirm"\)/);
+  assert.match(drawer, /act\("cancel"\)/);
+  assert.match(drawer, /className="ai-evidence-open"/);
+});
+
+test("Settings has an AI API section, and task cards show the AI summary and estimate", () => {
+  const settings = read("app/pages/settings.tsx");
+  const ai = read("app/aiSettings.tsx");
+  const card = read("app/taskCard.tsx");
+  assert.match(settings, /<AiSettingsSection \/>/);
+  assert.match(ai, /Base URL \(fixed\)/);
+  assert.match(ai, /Fetch models/);
+  assert.match(ai, /Test selected model/);
+  assert.match(ai, /Connection verified in \$\{result\.latency_ms\} ms\. AI Chat is ready\./);
+  assert.match(ai, /PasswordField/);
+  assert.match(card, /<AiSummary task=\{task\} \/>/);
+  assert.match(card, /if \(!data \|\| data\.status === "unavailable"\) return null;/);
+  assert.match(card, /return "AI estimate";/);
 });
 
 test("nginx makes browsers check the page on every visit and keep hashed assets", () => {

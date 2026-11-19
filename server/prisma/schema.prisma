@@ -43,6 +43,12 @@ model User {
   workSessions     WorkSession[]
   taskProgress     TaskProgress[]
   taskFileLinks    TaskFileLink[]
+  // AI parity: own AI connection, chat history and pending confirmations, task summaries and estimates.
+  aiConnection     AiConnection?
+  aiConversations  AiConversation[]
+  aiConfirmations  AiConfirmation[]
+  aiSummaries      TaskAiSummary[]
+  aiEstimates      TaskAiEstimate[]
 
   @@index([previewExpiresAt])
   @@map("users")
@@ -230,6 +236,8 @@ model Task {
   workSessions     WorkSession[]
   progressHistory  TaskProgress[]
   fileLinks        TaskFileLink[]
+  aiSummary        TaskAiSummary?
+  aiEstimate       TaskAiEstimate?
 
   @@unique([courseId, canvasId])
   @@index([userId, dueAt])
@@ -445,4 +453,115 @@ model TaskFileLink {
   @@unique([taskId, fileCanvasId])
   @@index([userId])
   @@map("task_file_links")
+}
+
+// --- AI parity (settings, chat, summaries, estimates) ---
+
+/// A user's own AI connection from Settings > AI API. Without a verified one the server's AI_API_KEY is used.
+model AiConnection {
+  userId             String    @id @map("user_id") @db.Uuid
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// A preset id from ai/presets.ts; the base URL always comes from the preset, never from the client.
+  provider           String
+  modelId            String    @default("") @map("model_id")
+  /// The provider's API key sealed with CREDENTIALS_KEY (AAD bound to user id and purpose). Never returned.
+  keyCiphertext      String?   @map("key_ciphertext")
+  /// Bumped on every provider, model or key change; a test only counts for the generation it ran against.
+  generation         Int       @default(0)
+  verifiedGeneration Int?      @map("verified_generation")
+  verifiedAt         DateTime? @map("verified_at") @db.Timestamptz(3)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("ai_connections")
+}
+
+model AiConversation {
+  id            String           @id @default(uuid()) @db.Uuid
+  userId        String           @map("user_id") @db.Uuid
+  user          User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt     DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  messages      AiChatMessage[]
+  confirmations AiConfirmation[]
+
+  @@index([userId, updatedAt])
+  @@map("ai_conversations")
+}
+
+model AiChatMessage {
+  id             Int            @id @default(autoincrement())
+  conversationId String         @map("conversation_id") @db.Uuid
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// user or assistant.
+  role           String
+  /// message, confirmation or mutation_result.
+  kind           String         @default("message")
+  content        String
+  toolName       String?        @map("tool_name")
+  /// Evidence cards or the confirmation card shown with the message.
+  payload        Json?
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([conversationId, id])
+  @@map("ai_chat_messages")
+}
+
+/// A change AI Chat proposed. It runs only when its owner confirms it, before it expires.
+model AiConfirmation {
+  id             String         @id @default(uuid()) @db.Uuid
+  userId         String         @map("user_id") @db.Uuid
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversationId String         @map("conversation_id") @db.Uuid
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  toolName       String         @map("tool_name")
+  /// The validated arguments the tool runs with.
+  arguments      Json
+  summary        String
+  /// What the card lists: [{label, value}].
+  details        Json
+  /// PENDING, APPLYING, APPLIED, CANCELLED, EXPIRED or FAILED.
+  status         String         @default("PENDING")
+  result         Json?
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  expiresAt      DateTime       @map("expires_at") @db.Timestamptz(3)
+  resolvedAt     DateTime?      @map("resolved_at") @db.Timestamptz(3)
+
+  @@index([userId, status])
+  @@index([conversationId])
+  @@map("ai_confirmations")
+}
+
+/// A short AI summary of a Canvas assignment's description, kept while the description and model stay the same.
+model TaskAiSummary {
+  taskId    Int      @id @map("task_id")
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// SHA-256 of the description and model the summary was made from.
+  inputHash String   @map("input_hash")
+  /// PENDING, READY or FAILED.
+  status    String
+  summary   String?
+  attempts  Int      @default(0)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([userId])
+  @@map("task_ai_summaries")
+}
+
+/// An AI estimate of a Canvas task's total work, used when the student gave none.
+model TaskAiEstimate {
+  taskId    Int      @id @map("task_id")
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String   @map("user_id") @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  inputHash String   @map("input_hash")
+  /// PENDING, READY or FAILED. A previous estimate's minutes stay while a new one is made.
+  status    String
+  minutes   Int?
+  attempts  Int      @default(0)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([userId])
+  @@map("task_ai_estimates")
 }

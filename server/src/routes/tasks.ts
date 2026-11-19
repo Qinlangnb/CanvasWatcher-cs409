@@ -219,3 +219,6 @@ export function tasksRouter(db: Db): Router {
 
   return router;
 }
+
+/** For AI Chat's confirmed changes (ai/writeTools.ts), which validate like this route. */
+export { changes as taskChangeSchema };

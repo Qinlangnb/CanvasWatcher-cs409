@@ -228,3 +228,6 @@ export function calendarRouter(db: Db): Router {
 export function isIcsUpload(method: string, path: string): boolean {
   return method === "POST" && path === "/api/calendar/sources";
 }
+
+/** For AI Chat's confirmed changes (ai/writeTools.ts), which validate like these routes. */
+export { eventChanges, eventCreation, eventTimes };
