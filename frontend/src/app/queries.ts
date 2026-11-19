@@ -4,8 +4,6 @@ import { isApiError, request } from "./api";
 import type {
   AiStatus,
   CalendarEvent,
-  ChatMessage,
-  ChatReply,
   CalendarImport,
   CalendarSource,
   CanvasConnection,
@@ -50,7 +48,7 @@ export const keys = {
   settings: ["settings"] as const,
   events: (from: string, to: string) => ["events", { from, to }] as const,
   sources: ["calendar-sources"] as const,
-  files: (params: { courseId?: number; q?: string }) => ["files", params] as const,
+  files: (params: { courseId?: number; q?: string; type?: string }) => ["files", params] as const,
   changes: (params: { courseId?: number; unread?: boolean }) => ["changes", "list", params] as const,
   change: (id: number) => ["changes", "detail", id] as const,
   unreadCount: ["changes", "unread-count"] as const,
@@ -342,17 +340,9 @@ export function useTaskDetail(id: number, enabled = true) {
   });
 }
 
-/** Whether this server has AI Chat set up. */
+/** Whether AI is available to this account (its own connection or the server's); AI Chat hooks are in aiApi.ts. */
 export function useAiStatus() {
   return useQuery({ queryKey: keys.ai, queryFn: () => request<AiStatus>("/api/ai"), staleTime: 10 * 60_000 });
-}
-
-/** One AI Chat turn. The conversation lives in the browser and is sent whole each time. */
-export function useAiChat() {
-  return useMutation({
-    mutationFn: (body: { messages: ChatMessage[]; page: { path: string; course_id: number | null } }) =>
-      request<ChatReply>("/api/ai/chat", { method: "POST", body }),
-  });
 }
 
 /**
@@ -391,7 +381,7 @@ export function useDeleteTask() {
 export const FILE_PAGE_SIZE = 50;
 
 /** Files newest first, `pages` pages of them, like `useChanges`. */
-export function useFiles(params: { courseId?: number; q?: string; pages: number }) {
+export function useFiles(params: { courseId?: number; q?: string; type?: string; pages: number }) {
   const { pages, ...filters } = params;
   return useQuery({
     queryKey: [...keys.files(filters), pages],
@@ -400,7 +390,7 @@ export function useFiles(params: { courseId?: number; q?: string; pages: number 
       let cursor: string | null | undefined;
       for (let page = 0; page < pages; page += 1) {
         const result: FilePage = await request(
-          query("/api/files", { course_id: filters.courseId, q: filters.q, limit: FILE_PAGE_SIZE, cursor: cursor ?? undefined }),
+          query("/api/files", { course_id: filters.courseId, q: filters.q, type: filters.type, limit: FILE_PAGE_SIZE, cursor: cursor ?? undefined }),
         );
         items.push(...result.items);
         cursor = result.next_cursor;

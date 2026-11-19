@@ -10,11 +10,14 @@ import { HttpError } from "../http/errors.js";
 import { idParam, parseQuery } from "../http/params.js";
 import { isPreview, previewUnavailable } from "../preview/accounts.js";
 import type { Services } from "../services.js";
+import { chooseDefaultTerm, normalizeTerm } from "../courses/terms.js";
 import { notConnected } from "./canvas.js";
 import { openTaskWhere, presentCourse, type CourseCounts } from "./present.js";
 
 const listQuery = z.object({
   archived: z.enum(["true", "false"]).default("false"),
+  /** A term id from GET /api/courses/terms; "all" or absent lists every term. */
+  term_id: z.string().trim().max(80).optional(),
 });
 
 const archive = z.object({ archived: z.boolean({ error: "Send archived as true or false." }) });
@@ -61,12 +64,50 @@ export function coursesRouter(db: Db, services: Services): Router {
   router.get("/", async (req, res) => {
     const userId = currentAuth(res.locals).user.id;
     const query = parseQuery(listQuery, req.query);
-    const courses = await db.course.findMany({
+    const all = await db.course.findMany({
       where: { userId, archivedAt: query.archived === "true" ? { not: null } : null },
       orderBy: [{ courseCode: "asc" }, { id: "asc" }],
     });
+    const termId = query.term_id && query.term_id !== "all" ? query.term_id : null;
+    const courses = termId ? all.filter((course) => normalizeTerm(course.termName, course.termStartAt, course.termEndAt).id === termId) : all;
     const counts = await countsFor(db, userId, courses.map((course) => course.id));
     res.json(courses.map((course) => presentCourse(course, counts.get(course.id) as CourseCounts)));
+  });
+
+  /** Terms of the user's courses, newest first, with course counts and the default (containing today, else newest). */
+  router.get("/terms", async (_req, res) => {
+    const userId = currentAuth(res.locals).user.id;
+    const courses = await db.course.findMany({
+      where: { userId },
+      select: { termName: true, termStartAt: true, termEndAt: true, archivedAt: true },
+    });
+    const terms = new Map<string, { term: ReturnType<typeof normalizeTerm>; active: number; archived: number }>();
+    for (const course of courses) {
+      const term = normalizeTerm(course.termName, course.termStartAt, course.termEndAt);
+      const entry = terms.get(term.id) ?? { term, active: 0, archived: 0 };
+      if (course.archivedAt) entry.archived += 1;
+      else entry.active += 1;
+      // Dates fill in from any course of the term that has them.
+      entry.term.startAt ??= term.startAt;
+      entry.term.endAt ??= term.endAt;
+      terms.set(term.id, entry);
+    }
+    const withActive = [...terms.values()].filter((entry) => entry.active > 0).map((entry) => entry.term);
+    const defaultId = chooseDefaultTerm(withActive);
+    res.json(
+      [...terms.values()]
+        .sort((a, b) => (a.term.sortKey < b.term.sortKey ? 1 : a.term.sortKey > b.term.sortKey ? -1 : 0))
+        .map(({ term, active, archived }) => ({
+          term_id: term.id,
+          display_name: term.displayName,
+          start_at: term.startAt?.toISOString() ?? null,
+          end_at: term.endAt?.toISOString() ?? null,
+          sort_key: term.sortKey,
+          active_course_count: active,
+          archived_course_count: archived,
+          is_default: term.id === defaultId,
+        })),
+    );
   });
 
   router.get("/:id", async (req, res) => {
@@ -146,6 +187,31 @@ export function coursesRouter(db: Db, services: Services): Router {
     if (!count) throw courseNotFound();
     const course = (await db.course.findFirst({ where: { id, userId } })) as Course;
     res.json(await presentOne(userId, course));
+  });
+
+  router.post("/:id/archive", async (req, res) => {
+    const userId = currentAuth(res.locals).user.id;
+    const course = await db.course.findFirst({ where: { id: idParam(req.params.id, courseNotFound()), userId } });
+    if (!course) throw courseNotFound();
+    const updated = course.archivedAt ? course : await db.course.update({ where: { id: course.id }, data: { archivedAt: new Date() } });
+    res.json(await presentOne(userId, updated));
+  });
+
+  /**
+   * Restores an archived course and queues a sync, so anything that changed while it was hidden is
+   * reconciled. `reconciliation_queued` is false when no sync could start (a preview, or no Canvas).
+   */
+  router.post("/:id/restore", async (req, res) => {
+    const { user } = currentAuth(res.locals);
+    const course = await db.course.findFirst({ where: { id: idParam(req.params.id, courseNotFound()), userId: user.id } });
+    if (!course) throw courseNotFound();
+    const updated = course.archivedAt ? await db.course.update({ where: { id: course.id }, data: { archivedAt: null } }) : course;
+    let queued = false;
+    if (!isPreview(user)) {
+      const connection = await db.canvasConnection.findUnique({ where: { userId: user.id }, select: { status: true } });
+      if (connection?.status === "OK") queued = (await services.sync.start(user.id, "MANUAL")) !== null;
+    }
+    res.json({ ...(await presentOne(user.id, updated)), reconciliation_queued: queued });
   });
 
   return router;

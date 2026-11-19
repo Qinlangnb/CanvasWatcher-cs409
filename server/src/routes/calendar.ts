@@ -115,6 +115,62 @@ function checkRule(rule: string | null | undefined): string | null {
   }
 }
 
+/** A linked course must be one of the user's own. */
+async function checkCourse(db: Db, userId: string, courseId: number | null | undefined): Promise<void> {
+  if (courseId == null) return;
+  if (!(await db.course.findFirst({ where: { id: courseId, userId }, select: { id: true } }))) {
+    throw new FieldError("course_id", "Choose one of your courses.");
+  }
+}
+
+/** The stored fields of a new manual event, checked like POST /events. */
+export async function newEventData(db: Db, userId: string, body: z.infer<typeof eventCreation>, userZone: string) {
+  checkZone(body.time_zone);
+  const allDay = body.all_day ?? false;
+  const times = eventTimes(allDay, body.start, body.end, body.time_zone || userZone);
+  const recurrenceRule = checkRule(body.recurrence_rule);
+  await checkCourse(db, userId, body.course_id);
+  return {
+    userId,
+    title: body.title,
+    location: body.location || null,
+    description: body.description || null,
+    allDay,
+    busy: body.busy ?? !allDay,
+    timeZone: body.time_zone || null,
+    eventType: body.event_type ?? "other",
+    courseId: body.course_id ?? null,
+    recurrenceRule,
+    ...times,
+  };
+}
+
+/** The changed fields of a manual event, checked like PATCH /events/:id. */
+export async function eventChangeData(db: Db, userId: string, event: EventWithSource, body: z.infer<typeof eventChanges>, userZone: string) {
+  checkZone(body.time_zone);
+  const zone = (body.time_zone !== undefined ? body.time_zone : event.timeZone) || userZone;
+  const current = presentEvent(event);
+  const allDay = body.all_day ?? event.allDay;
+  const times: { startAt?: Date; endAt?: Date } =
+    body.all_day !== undefined || body.start !== undefined || body.end !== undefined
+      ? eventTimes(allDay, body.start ?? current.start, body.end ?? current.end, zone)
+      : {};
+  const recurrenceRule = body.recurrence_rule !== undefined ? checkRule(body.recurrence_rule) : undefined;
+  await checkCourse(db, userId, body.course_id);
+  return {
+    ...(body.title !== undefined && { title: body.title }),
+    ...(body.location !== undefined && { location: body.location || null }),
+    ...(body.description !== undefined && { description: body.description || null }),
+    ...(body.busy !== undefined && { busy: body.busy }),
+    ...(body.time_zone !== undefined && { timeZone: body.time_zone || null }),
+    ...(body.event_type !== undefined && { eventType: body.event_type }),
+    ...(body.course_id !== undefined && { courseId: body.course_id }),
+    ...(recurrenceRule !== undefined && { recurrenceRule }),
+    allDay,
+    ...times,
+  };
+}
+
 export function calendarRouter(db: Db): Router {
   const router = Router();
   router.use("/sources", calendarSourcesRouter(db));
@@ -136,14 +192,6 @@ export function calendarRouter(db: Db): Router {
         "EVENT_IMPORTED",
         `This event comes from "${event.source?.name ?? "an imported calendar"}". Change it in that calendar and import it again.`,
       );
-    }
-  }
-
-  /** A linked course must be one of the user's own. */
-  async function checkCourse(userId: string, courseId: number | null | undefined): Promise<void> {
-    if (courseId == null) return;
-    if (!(await db.course.findFirst({ where: { id: courseId, userId }, select: { id: true } }))) {
-      throw new FieldError("course_id", "Choose one of your courses.");
     }
   }
 
@@ -208,27 +256,8 @@ export function calendarRouter(db: Db): Router {
     const userId = currentAuth(res.locals).user.id;
     const body = eventCreation.parse(req.body ?? {});
     const settings = await getSettings(db, userId);
-    checkZone(body.time_zone);
-    const allDay = body.all_day ?? false;
-    const times = eventTimes(allDay, body.start, body.end, body.time_zone || settings.timeZone);
-    const recurrenceRule = checkRule(body.recurrence_rule);
-    await checkCourse(userId, body.course_id);
-    const event = await db.calendarEvent.create({
-      data: {
-        userId,
-        title: body.title,
-        location: body.location || null,
-        description: body.description || null,
-        allDay,
-        busy: body.busy ?? !allDay,
-        timeZone: body.time_zone || null,
-        eventType: body.event_type ?? "other",
-        courseId: body.course_id ?? null,
-        recurrenceRule,
-        ...times,
-      },
-      include: eventInclude,
-    });
+    const data = await newEventData(db, userId, body, settings.timeZone);
+    const event = await db.calendarEvent.create({ data, include: eventInclude });
     res.status(201).json(presentEvent(event));
   });
 
@@ -239,32 +268,8 @@ export function calendarRouter(db: Db): Router {
     const event = await findEvent(userId, req.params.id);
     requireManual(event);
     const settings = await getSettings(db, userId);
-    checkZone(body.time_zone);
-    const zone = (body.time_zone !== undefined ? body.time_zone : event.timeZone) || settings.timeZone;
-    const current = presentEvent(event);
-    const allDay = body.all_day ?? event.allDay;
-    const times =
-      body.all_day !== undefined || body.start !== undefined || body.end !== undefined
-        ? eventTimes(allDay, body.start ?? current.start, body.end ?? current.end, zone)
-        : {};
-    const recurrenceRule = body.recurrence_rule !== undefined ? checkRule(body.recurrence_rule) : undefined;
-    await checkCourse(userId, body.course_id);
-    const updated = await db.calendarEvent.update({
-      where: { id: event.id },
-      data: {
-        ...(body.title !== undefined && { title: body.title }),
-        ...(body.location !== undefined && { location: body.location || null }),
-        ...(body.description !== undefined && { description: body.description || null }),
-        ...(body.busy !== undefined && { busy: body.busy }),
-        ...(body.time_zone !== undefined && { timeZone: body.time_zone || null }),
-        ...(body.event_type !== undefined && { eventType: body.event_type }),
-        ...(body.course_id !== undefined && { courseId: body.course_id }),
-        ...(recurrenceRule !== undefined && { recurrenceRule }),
-        allDay,
-        ...times,
-      },
-      include: eventInclude,
-    });
+    const data = await eventChangeData(db, userId, event, body, settings.timeZone);
+    const updated = await db.calendarEvent.update({ where: { id: event.id }, data, include: eventInclude });
     res.json(presentEvent(updated));
   });
 
@@ -279,3 +284,6 @@ export function calendarRouter(db: Db): Router {
 
   return router;
 }
+
+/** For AI Chat's confirmed changes (ai/writeTools.ts), which validate like these routes. */
+export { eventChanges, eventCreation };

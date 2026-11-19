@@ -11,6 +11,8 @@ import { useToast } from "../toast";
 import type { Task, Today, TodayItem, UpcomingItem } from "../types";
 import { Alert, Badge, EmptyState, PageHeader, QueryError, SkeletonList } from "../ui";
 import { eventOrder, eventTimeLabel } from "../zoned";
+import { PRIORITY_TONES } from "../taskHelpers";
+import { WorkControl, WorkingBanner } from "../workTimer";
 
 const TODAY_CHANGES = 5;
 
@@ -103,6 +105,7 @@ function PlanNote({ item }: { item: TodayItem }) {
       : `${formatMinutes(item.planned_minutes)} today`;
   return (
     <p className="plan-note">
+      <Badge tone={PRIORITY_TONES[item.priority_bucket]}>{item.priority_bucket}</Badge>
       {item.reasons.map((reason) => (
         <Badge key={reason} tone={REASON_LABELS[reason].tone}>
           {REASON_LABELS[reason].label}
@@ -114,6 +117,7 @@ function PlanNote({ item }: { item: TodayItem }) {
           Not today
         </button>
       ) : null}
+      <WorkControl task={item.task} compact />
     </p>
   );
 }
@@ -268,7 +272,9 @@ function DueSoonItem({
           <span className="due-soon-title">{task.title}</span>
         </span>
         <span className="due-soon-meta">
-          <time dateTime={due}>{formatTime(new Date(due), zone)}</time>
+          <time dateTime={due} title={task.deadline_precision === "date_only" ? "Time not specified by source" : undefined}>
+            {task.deadline_precision === "date_only" ? "Any time" : formatTime(new Date(due), zone)}
+          </time>
           {state}
         </span>
         <span className="due-soon-chevron" aria-hidden="true">
@@ -429,6 +435,7 @@ export function TodayPage() {
           Your courses and tasks will appear here as soon as it finishes.
         </Alert>
       ) : null}
+      <WorkingBanner />
 
       <div className="today-grid">
         <div className="today-main">

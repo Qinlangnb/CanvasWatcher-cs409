@@ -12,6 +12,8 @@ import { canvasRouter } from "./routes/canvas.js";
 import { changesRouter } from "./routes/changes.js";
 import { coursesRouter } from "./routes/courses.js";
 import { aiRouter } from "./routes/ai.js";
+import { aiSettingsRouter } from "./routes/aiSettings.js";
+import { aiTasksRouter } from "./routes/aiTasks.js";
 import { previewRouter } from "./routes/preview.js";
 import { filesRouter } from "./routes/files.js";
 import { sessionsRouter } from "./routes/sessions.js";
@@ -20,6 +22,7 @@ import { syncRouter } from "./routes/sync.js";
 import { tasksRouter } from "./routes/tasks.js";
 import { todayRouter } from "./routes/today.js";
 import { usersRouter } from "./routes/users.js";
+import { workRouter } from "./routes/work.js";
 import type { Services } from "./services.js";
 
 export interface AppDependencies {
@@ -61,10 +64,15 @@ export function createApp({ config, db, logger, services }: AppDependencies): Ex
   app.use("/api/canvas", requireUser, canvasRouter(db, config, services));
   app.use("/api/sync", requireUser, syncRouter(db, services));
   app.use("/api/courses", requireUser, coursesRouter(db, services));
+  // AI parity: re-estimates under /api/tasks, AI settings under /api/settings/ai, Today kicks off summaries.
+  app.use("/api/tasks", requireUser, aiTasksRouter(db, services));
+  app.use("/api/settings/ai", requireUser, aiSettingsRouter(db, services));
+  app.use("/api/today", requireUser, services.aiJobs.afterToday());
   app.use("/api/tasks", requireUser, tasksRouter(db));
   app.use("/api/files", requireUser, filesRouter(db, services));
   app.use("/api/changes", requireUser, changesRouter(db));
   app.use("/api/today", requireUser, todayRouter(db));
+  app.use("/api/work", requireUser, workRouter(db));
   app.use("/api/calendar", requireUser, calendarRouter(db));
   app.use("/api/settings", requireUser, settingsRouter(db));
   app.use("/api/ai", requireUser, aiRouter(db, services));

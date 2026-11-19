@@ -31,6 +31,8 @@ export interface PlanTask {
   estimatedMinutes: number | null;
   /** Minutes spent so far; with progress it sets the work left. */
   spentMinutes?: number;
+  /** Seconds of finished work-timer sessions; added to spentMinutes. */
+  trackedSeconds?: number;
   /** Local date the student started the task ahead of the plan, if any. */
   startedOn?: string | null;
 }

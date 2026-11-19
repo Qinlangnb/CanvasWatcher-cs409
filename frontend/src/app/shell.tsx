@@ -9,6 +9,7 @@ import { useConnection, useIsPreview, useMe, useSync, useUnreadCount } from "./q
 import { TaskEditorProvider } from "./tasks";
 import { useToast } from "./toast";
 import { Alert, Spinner, useFocusHeading } from "./ui";
+import { WorkHeartbeat } from "./workTimer";
 
 /** Re-renders every `intervalMs` so relative times ("5 minutes ago") stay true. */
 export function useNow(intervalMs = 60_000): Date {
@@ -285,6 +286,8 @@ export function AppShell() {
         </main>
 
         <AiChat />
+        {/* Keeps a running work timer checked in from any page. */}
+        <WorkHeartbeat />
 
         <nav className="tabbar" aria-label="Main">
           <ul>

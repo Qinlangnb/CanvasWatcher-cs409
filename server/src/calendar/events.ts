@@ -3,7 +3,7 @@
 import { DateTime, IANAZone } from "luxon";
 import type { Db } from "../db.js";
 import type { CalendarEvent, CalendarSource, Course, Prisma } from "../generated/prisma/client.js";
-import { type Availability, type BusyEvent, busyFromEvents, minuteOf, type MinuteInterval } from "./capacity.js";
+import { type Availability, type BusyEvent, busyFromEvents, mergeBusy, minuteOf, type MinuteInterval } from "./capacity.js";
 import { RecurrenceError, expandSeries } from "./recurrence.js";
 
 export type EventWithSource = CalendarEvent & {
@@ -160,6 +160,26 @@ export function busyTime(
   const busy = busyFromEvents(events, commutes);
   if (warnings.some((warning) => warning.event.busy)) busy.push({ start: range.from.getTime(), end: range.to.getTime(), isClass: false });
   return { events, busy };
+}
+
+/**
+ * What a plan over [from, to) needs: occurrences, busy time (commute and short class gaps merged in)
+ * and the availability for those dates. Today and AI Chat share it so their numbers match.
+ */
+export async function planningInputs(db: Db, userId: string, from: Date, to: Date, timeZone: string, lastDate?: string) {
+  const first = DateTime.fromJSDate(from, { zone: timeZone }).toISODate() as string;
+  const last = lastDate ?? (DateTime.fromJSDate(to, { zone: timeZone }).toISODate() as string);
+  const [calendar, commutes, availability] = await Promise.all([
+    occurrencesBetween(db, userId, from, to, timeZone),
+    loadCommutes(db, userId),
+    loadAvailability(db, userId, first, last),
+  ]);
+  const { busy } = busyTime(calendar.occurrences, calendar.warnings, commutes, { from, to });
+  return {
+    ...calendar,
+    availability,
+    busy: mergeBusy(busy).map((span) => ({ start: new Date(span.start), end: new Date(span.end) })),
+  };
 }
 
 /** Commute minutes by course id. */

@@ -4,7 +4,7 @@ import { type CalendarFilters, type CalendarLayer, type CalendarWarning, calenda
 import { addMonths, dayLabel, minutesOnDay, monthGrid, monthLabel, placeEvents, sameMonth, slotValue } from "../calendarGrid";
 import { EventDialog, ImportCalendarDialog } from "../events";
 import { formatMinutes, formatTime } from "../format";
-import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon, ClipboardIcon, LockIcon, PlusIcon, UploadIcon } from "../icons";
+import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon, ClipboardIcon, ClockIcon, LockIcon, PlusIcon, UploadIcon } from "../icons";
 import { TaskList } from "../lists";
 import { useCalendarSources, usePlanZone, useSettings, useTasks } from "../queries";
 import { useNow } from "../shell";
@@ -26,9 +26,14 @@ import {
   weekdayLabel,
   type TimelineDay,
 } from "../zoned";
+import { CalendarSwimlane } from "../courseViews";
 
-type View = "day" | "week" | "month" | "timeline";
-const VIEWS: View[] = ["day", "week", "month", "timeline"];
+/** "timeline" is the swimlane chart; "workload" the day-by-day list measured against the daily goal. */
+type View = "day" | "week" | "month" | "timeline" | "workload";
+const VIEWS: View[] = ["day", "week", "month", "timeline", "workload"];
+/** The views that show calendar dates and use the date navigation. */
+type RangeView = "day" | "week" | "month";
+const isRangeView = (view: View): view is RangeView => view === "day" || view === "week" || view === "month";
 const TIMELINE_DAYS = 28;
 /** Pixels per hour on the day grid. */
 const HOUR_PX = 48;
@@ -499,7 +504,7 @@ function viewLabel(view: View, anchor: string, dates: string[]): string {
   return weekRangeLabel(dates);
 }
 
-const STEP_LABELS: Record<Exclude<View, "timeline">, [string, string, string]> = {
+const STEP_LABELS: Record<RangeView, [string, string, string]> = {
   day: ["Previous day", "Today", "Next day"],
   week: ["Previous week", "This week", "Next week"],
   month: ["Previous month", "This month", "Next month"],
@@ -516,7 +521,7 @@ function CalendarRange({
   onCreate,
   onDay,
 }: {
-  view: Exclude<View, "timeline">;
+  view: RangeView;
   anchor: string;
   today: string;
   zone: string;
@@ -621,11 +626,15 @@ export function CalendarPage() {
             Month
           </button>
           <button type="button" aria-pressed={view === "timeline"} onClick={() => go({ view: "timeline" })}>
-            <ClipboardIcon size={16} />
+            <ClockIcon size={16} />
             Timeline
           </button>
+          <button type="button" aria-pressed={view === "workload"} onClick={() => go({ view: "workload" })}>
+            <ClipboardIcon size={16} />
+            Workload
+          </button>
         </div>
-        {view !== "timeline" ? (
+        {isRangeView(view) ? (
           <div className="week-nav">
             <button type="button" className="icon-button" aria-label={STEP_LABELS[view][0]} onClick={() => step(-1)}>
               <ChevronLeftIcon />
@@ -646,11 +655,9 @@ export function CalendarPage() {
           </div>
         ) : null}
       </div>
-      {view !== "timeline" ? <DisplayFilters filters={filters} onChange={changeFilters} /> : null}
+      {isRangeView(view) ? <DisplayFilters filters={filters} onChange={changeFilters} /> : null}
 
-      {view === "timeline" ? (
-        <TimelineView today={today} zone={zone} now={now} />
-      ) : (
+      {isRangeView(view) ? (
         <CalendarRange
           view={view}
           anchor={anchor}
@@ -661,7 +668,9 @@ export function CalendarPage() {
           onCreate={create}
           onDay={(date) => go({ view: "day", date })}
         />
-      )}
+      ) : null}
+      {view === "timeline" ? <CalendarSwimlane now={now} zone={zone} /> : null}
+      {view === "workload" ? <TimelineView today={today} zone={zone} now={now} /> : null}
 
       {dialog ? (
         <EventDialog

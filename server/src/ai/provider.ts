@@ -1,4 +1,5 @@
 // The AI provider: one call to an OpenAI-compatible chat completions API (DeepSeek by default).
+// ai/anthropic.ts speaks the same interface over Anthropic's messages API.
 import type { AiConfig } from "../config.js";
 
 export interface ToolCall {
@@ -28,6 +29,8 @@ export type AssistantMessage = Extract<ChatMessage, { role: "assistant" }>;
 
 export interface AiProvider {
   readonly model: string;
+  /** "server" for the server-wide key, otherwise the user's preset id (ai/presets.ts). */
+  readonly source?: string;
   /** One completion; with `tools` empty the model has to answer in text. */
   complete(messages: ChatMessage[], tools: ToolSpec[]): Promise<AssistantMessage>;
 }
@@ -35,7 +38,7 @@ export interface AiProvider {
 /** What went wrong, without the provider's own text (which may echo the request). */
 export class AiError extends Error {
   constructor(
-    readonly kind: "auth" | "rate_limited" | "bad_request" | "unavailable" | "bad_reply",
+    readonly kind: "auth" | "rate_limited" | "bad_request" | "not_found" | "unavailable" | "bad_reply",
     message: string,
   ) {
     super(message);
@@ -43,16 +46,31 @@ export class AiError extends Error {
 }
 
 /** Per call. With chat.ts's turn budget this keeps a turn under Cloudflare's 100-second cut-off. */
-const TIMEOUT_MS = 40_000;
+export const TIMEOUT_MS = 40_000;
+
+/** The fixed error for a failed HTTP answer; the provider's own text is never passed on. */
+export function httpFailure(status: number): AiError {
+  if (status === 401 || status === 403) return new AiError("auth", "The AI service rejected the key.");
+  if (status === 429) return new AiError("rate_limited", "The AI service is busy. Try again in a minute.");
+  if (status === 404) return new AiError("not_found", "The AI service could not find this model.");
+  if (status === 400 || status === 422) return new AiError("bad_request", "The AI service could not use this request.");
+  return new AiError("unavailable", "The AI service is not available right now.");
+}
+
+export const timedOut = () => new AiError("unavailable", "The AI service did not answer in time.");
 
 export class OpenAiCompatibleProvider implements AiProvider {
   readonly model: string;
+  readonly source: string;
 
   constructor(
     private readonly config: AiConfig,
     private readonly fetchImpl: typeof fetch = fetch,
+    source = "server",
+    private readonly timeoutMs = TIMEOUT_MS,
   ) {
     this.model = config.model;
+    this.source = source;
   }
 
   async complete(messages: ChatMessage[], tools: ToolSpec[]): Promise<AssistantMessage> {
@@ -67,17 +85,12 @@ export class OpenAiCompatibleProvider implements AiProvider {
           ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
           stream: false,
         }),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+        signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch {
-      throw new AiError("unavailable", "The AI service did not answer in time.");
+      throw timedOut();
     }
-    if (response.status === 401 || response.status === 403) throw new AiError("auth", "The AI service rejected this server's key.");
-    if (response.status === 429) throw new AiError("rate_limited", "The AI service is busy. Try again in a minute.");
-    if (response.status === 400 || response.status === 404 || response.status === 422) {
-      throw new AiError("bad_request", "The AI service could not use this request.");
-    }
-    if (!response.ok) throw new AiError("unavailable", "The AI service is not available right now.");
+    if (!response.ok) throw httpFailure(response.status);
     const body = (await response.json().catch(() => null)) as {
       choices?: { message?: { content?: unknown; tool_calls?: unknown; reasoning_content?: unknown } }[];
     } | null;
