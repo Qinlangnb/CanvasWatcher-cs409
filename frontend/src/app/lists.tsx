@@ -21,8 +21,12 @@ import { ChevronRightIcon, ClipboardIcon, DownloadIcon, FileIcon, MegaphoneIcon 
 import { useChange, useIsPreview, useMarkRead, usePlanZone } from "./queries";
 import { TaskCard } from "./taskCard";
 import { TaskCheck, useTaskEditor } from "./tasks";
-import type { Change, ChangeKind, ContentValue, Course, CourseFile, Task } from "./types";
+import type { Change, ChangeDetail, ChangeKind, ContentValue, Course, CourseFile, Task } from "./types";
 import { Badge, Dialog, QueryError, SkeletonList } from "./ui";
+import { FileMenu } from "./fileTypes";
+import { formatTaskDue } from "./taskExtras";
+import { FILE_TYPE_LABELS } from "./taskHelpers";
+import { useIsWorking } from "./workTimer";
 
 // --- Courses ---
 
@@ -31,9 +35,10 @@ export function CourseCard({ course }: { course: Course }) {
   return (
     <li className="course-card">
       <Link to={`/courses/${course.id}`} className="course-card-link">
-        <span className="course-code">{course.code}</span>
+        <span className="course-code">{course.display_code || course.code}</span>
         <span className="course-name">{course.name}</span>
-        {course.term ? <span className="course-term">{course.term.name}</span> : null}
+        {course.term ? <span className="course-term">{course.term.display_name || course.term.name}</span> : null}
+        <span className="course-section">{course.section ?? "Section not specified"}</span>
       </Link>
       <dl className="course-stats">
         <div>
@@ -85,6 +90,7 @@ export function TaskRow({
   const editor = useTaskEditor();
   const open = task.state === "open" || task.state === "overdue";
   const hint = open && showHint ? dueHint(task.due_at, now, zone) : null;
+  const working = useIsWorking(task.id);
   const panelId = `task-details-${task.id}${anchorId ? "-plan" : ""}`;
   return (
     <li id={anchorId} className={`task-row state-${task.state}${details?.open ? " expanded" : ""}`}>
@@ -116,11 +122,12 @@ export function TaskRow({
           {task.points_possible !== null ? <span>{plural(task.points_possible, "pt")}</span> : null}
           {open && task.progress > 0 ? <span>{task.progress}% done</span> : null}
           {open ? <span>{formatMinutes(task.remaining_minutes)} left</span> : null}
+          {working ? <Badge tone="accent">Working on</Badge> : null}
         </p>
         {extra}
       </div>
       <div className="task-due">
-        <time dateTime={task.due_at ?? undefined}>{formatDue(task.due_at, now, zone)}</time>
+        <time dateTime={task.due_at ?? undefined}>{formatTaskDue(task, now, zone)}</time>
         {task.state === "done" ? <Badge tone="success">{doneLabel(task)}</Badge> : null}
         {task.state === "ignored" ? <Badge>Ignored</Badge> : null}
         {hint ? <Badge tone={hint.tone}>{hint.label}</Badge> : null}
@@ -156,20 +163,24 @@ export function TaskList({
   now,
   showCourse = true,
   expandable = false,
+  actions,
 }: {
   tasks: Task[];
   now: Date;
   showCourse?: boolean;
   /** Titles open the task in place instead of the editor. */
   expandable?: boolean;
+  /** Quick buttons under each row, such as Ignore. */
+  actions?: (task: Task) => ReactNode;
 }) {
+  const extra = (task: Task) => (actions ? <p className="task-quick">{actions(task)}</p> : undefined);
   return (
     <ul className="task-list">
       {tasks.map((task) =>
         expandable ? (
-          <ExpandableTaskRow key={task.id} task={task} now={now} showCourse={showCourse} />
+          <ExpandableTaskRow key={task.id} task={task} now={now} showCourse={showCourse} extra={extra(task)} />
         ) : (
-          <TaskRow key={task.id} task={task} now={now} showCourse={showCourse} />
+          <TaskRow key={task.id} task={task} now={now} showCourse={showCourse} extra={extra(task)} />
         ),
       )}
     </ul>
@@ -177,7 +188,7 @@ export function TaskList({
 }
 
 /** Tasks of one course in the order a student works through them. */
-export function GroupedTasks({ tasks, now }: { tasks: Task[]; now: Date }) {
+export function GroupedTasks({ tasks, now, actions }: { tasks: Task[]; now: Date; actions?: (task: Task) => ReactNode }) {
   const overdue = tasks.filter((task) => task.state === "overdue");
   const upcoming = tasks.filter((task) => task.state === "open" && task.due_at);
   const undated = tasks.filter((task) => task.state === "open" && !task.due_at);
@@ -188,7 +199,7 @@ export function GroupedTasks({ tasks, now }: { tasks: Task[]; now: Date }) {
         <h3>
           {title} <span className="count">{list.length}</span>
         </h3>
-        <TaskList tasks={list} now={now} showCourse={false} />
+        <TaskList tasks={list} now={now} showCourse={false} actions={actions} />
       </section>
     ) : null;
   return (
@@ -218,7 +229,6 @@ const KIND_ICONS: Record<ChangeKind, typeof FileIcon> = {
   announcement: MegaphoneIcon,
 };
 
-const KIND_LABELS: Record<ChangeKind, string> = { assignment: "Assignment", file: "File", announcement: "Announcement" };
 
 function dayHeading(iso: string, now: Date): string {
   const offset = dayOffset(new Date(iso), now);
@@ -254,21 +264,22 @@ export function ChangeList({
             {group.items.map((change) => {
               const KindIcon = KIND_ICONS[change.kind];
               return (
-                <li key={change.id} className={`change-row${change.read ? "" : " unread"}`}>
+                <li key={change.id} className={`change-row category-${change.category}${change.read ? "" : " unread"}`}>
                   <span className={`change-icon kind-${change.kind} type-${change.change_type}`} aria-hidden="true">
                     <KindIcon size={18} />
                   </span>
                   <button type="button" className="change-open" onClick={() => onOpen(change.id)}>
                     <span className="change-summary">
                       {change.read ? null : <span className="visually-hidden">Unread: </span>}
-                      {change.summary}
+                      {change.ai_summary ?? change.summary}
                     </span>
                     <span className="change-meta">
+                      <span className={`category-badge category-${change.category}`}>{change.event_label}</span>
                       {showCourse ? <span className="course-chip">{change.course.code}</span> : null}
-                      <span>{KIND_LABELS[change.kind]}</span>
                       <time dateTime={change.detected_at}>{timeAgo(change.detected_at, now)}</time>
                     </span>
                   </button>
+                  <ReadToggle change={change} />
                   {change.read ? null : <span className="unread-dot" aria-hidden="true" />}
                 </li>
               );
@@ -277,6 +288,56 @@ export function ChangeList({
         </section>
       ))}
     </div>
+  );
+}
+
+/** Inline "Mark read" / "Mark unread" on every change row. */
+function ReadToggle({ change }: { change: Change }) {
+  const markRead = useMarkRead();
+  return (
+    <button
+      type="button"
+      className="button small ghost change-read-toggle"
+      disabled={markRead.isPending}
+      onClick={() => markRead.mutate({ id: change.id, read: !change.read })}
+    >
+      {change.read ? "Mark unread" : "Mark read"}
+      <span className="visually-hidden">: {change.summary}</span>
+    </button>
+  );
+}
+
+const SEVERITY_TONES = { low: "neutral", medium: "accent", high: "warning", critical: "danger" } as const;
+
+/** Before and after as text, with the raw values and the app's own bookkeeping folded away. */
+function ChangeSnapshots({ detail }: { detail: ChangeDetail }) {
+  return (
+    <>
+      {detail.before_text || detail.after_text ? (
+        <div className="snapshot-grid">
+          {detail.before_text ? (
+            <section aria-label="Before">
+              <h3>Before</h3>
+              <pre className="snapshot-text">{detail.before_text}</pre>
+            </section>
+          ) : null}
+          {detail.after_text ? (
+            <section aria-label="After">
+              <h3>After</h3>
+              <pre className="snapshot-text">{detail.after_text}</pre>
+            </section>
+          ) : null}
+        </div>
+      ) : null}
+      <details className="raw-metadata">
+        <summary>Raw metadata</summary>
+        <pre>{JSON.stringify({ before: detail.before, after: detail.after }, null, 2)}</pre>
+      </details>
+      <details className="raw-metadata">
+        <summary>Internal metadata</summary>
+        <pre>{JSON.stringify({ ...detail.internals, review: detail.review }, null, 2)}</pre>
+      </details>
+    </>
   );
 }
 
@@ -308,13 +369,21 @@ export function ChangeDialog({ id, onClose }: { id: number | null; onClose: () =
           <Badge tone={detail.change_type === "removed" ? "danger" : detail.change_type === "created" ? "success" : "accent"}>
             {detail.change_type === "created" ? "New" : detail.change_type === "removed" ? "Removed" : "Updated"}
           </Badge>
-          <span>{KIND_LABELS[detail.kind]}</span>
+          <span className={`category-badge category-${detail.category}`}>{detail.event_label}</span>
           <Link to={`/courses/${detail.course.id}`} onClick={onClose}>
             {detail.course.code}
           </Link>
           <span>Detected {formatDateTime(detail.detected_at)}</span>
         </p>
         <p className="change-detail-summary">{detail.summary}</p>
+        {detail.review?.status === "ready" ? (
+          <div className="change-review">
+            {detail.review.severity ? <Badge tone={SEVERITY_TONES[detail.review.severity]}>{detail.review.severity}</Badge> : null}
+            <span>
+              AI review: {detail.review.notify_user ? "worth your attention." : "no action needed."} {detail.review.reason}
+            </span>
+          </div>
+        ) : null}
         {fields.length > 0 ? (
           <table className="diff-table">
             <caption className="visually-hidden">What changed</caption>
@@ -342,6 +411,7 @@ export function ChangeDialog({ id, onClose }: { id: number | null; onClose: () =
             </tbody>
           </table>
         ) : null}
+        <ChangeSnapshots detail={detail} />
         {detail.related_task ? (
           <div className="related-task">
             <h3>Assignment</h3>
@@ -421,7 +491,10 @@ export function FileTable({ files, showCourse = true }: { files: CourseFile[]; s
           <tr key={file.id}>
             <th scope="row" className="file-name">
               <FileIcon size={18} />
-              <span>{file.name}</span>
+              <span>
+                {file.name}
+                <span className="file-type">{FILE_TYPE_LABELS[file.type] ?? "Other"}</span>
+              </span>
             </th>
             {showCourse ? (
               <td data-label="Course">
@@ -440,6 +513,7 @@ export function FileTable({ files, showCourse = true }: { files: CourseFile[]; s
             </td>
             <td className="file-action">
               <DownloadButton file={file} />
+              <FileMenu file={file} />
             </td>
           </tr>
         ))}

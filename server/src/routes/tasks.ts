@@ -7,6 +7,9 @@ import type { Prisma } from "../generated/prisma/client.js";
 import { FieldError, HttpError } from "../http/errors.js";
 import { idParam, parseQuery } from "../http/params.js";
 import { TASK_TYPES } from "../tasks/effort.js";
+import { taskChanged } from "../tasks/progress.js";
+import { correctionFor, stopTaskTimer } from "../tasks/work.js";
+import { endOfLocalDay, mountProgressRoutes, taskAttachments } from "./work.js";
 import { openTaskWhere, presentTask, taskDescription, taskInclude } from "./present.js";
 import { getSettings } from "./settings.js";
 
@@ -38,6 +41,8 @@ const creation = z
     title,
     type: taskType.default("other"),
     due_at: instant.nullable().default(null),
+    /** The due date has no time: due_at's local day is kept, at 23:59. */
+    due_date_only: z.boolean({ error: "Send due_date_only as true or false." }).default(false),
     estimated_minutes: estimate.nullable().default(null),
     notes: notes.nullable().default(null),
   })
@@ -66,11 +71,14 @@ const changes = z
     title,
     type: taskType,
     due_at: instant.nullable(),
+    due_date_only: z.boolean({ error: "Send due_date_only as true or false." }),
+    /** The task's state_revision as last seen; a newer one refuses done, ignored and progress changes. */
+    expected_revision: z.number({ error: "Send the revision as a whole number." }).int().min(0),
   })
   .partial()
   .strict();
 
-const CANVAS_FIELDS = ["title", "type", "due_at"] as const;
+const CANVAS_FIELDS = ["title", "type", "due_at", "due_date_only"] as const;
 
 const taskNotFound = () => new HttpError(404, "TASK_NOT_FOUND", "That task could not be found.");
 
@@ -110,8 +118,11 @@ export function tasksRouter(db: Db): Router {
   /** One task, with the assignment's description from Canvas when there is one. */
   router.get("/:id", async (req, res) => {
     const task = await findTask(currentAuth(res.locals).user.id, req.params.id);
-    res.json({ ...presentTask(task), description: await taskDescription(db, task) });
+    const [description, attachments] = await Promise.all([taskDescription(db, task), taskAttachments(db, task)]);
+    res.json({ ...presentTask(task), description, attachments });
   });
+
+  mountProgressRoutes(router, db);
 
   /** Students add their own tasks (a study session, a reading) to one of their courses. */
   router.post("/", async (req, res) => {
@@ -119,6 +130,8 @@ export function tasksRouter(db: Db): Router {
     const body = creation.parse(req.body ?? {});
     const course = await db.course.findFirst({ where: { id: body.course_id, userId }, select: { id: true } });
     if (!course) throw new FieldError("course_id", "Choose one of your courses.");
+    if (body.due_date_only && !body.due_at) throw new FieldError("due_at", "Choose the day it's due.");
+    const zone = body.due_date_only ? (await getSettings(db, userId)).timeZone : null;
     const task = await db.task.create({
       data: {
         userId,
@@ -126,7 +139,8 @@ export function tasksRouter(db: Db): Router {
         source: "PERSONAL",
         title: body.title,
         taskType: body.type,
-        dueAt: body.due_at,
+        dueAt: zone && body.due_at ? endOfLocalDay(body.due_at, zone) : body.due_at,
+        dueDateOnly: Boolean(zone && body.due_at),
         estimatedMinutes: body.estimated_minutes,
         notes: body.notes || null,
       },
@@ -143,24 +157,53 @@ export function tasksRouter(db: Db): Router {
       throw new HttpError(409, "TASK_FROM_CANVAS", "This task comes from Canvas. Change its title and due date in Canvas.");
     }
     const now = new Date();
+    // Done, ignored and progress are the task's state: they bump its revision, and a stale revision is refused.
+    const stateChange = body.done !== undefined || body.ignored !== undefined || body.progress !== undefined;
+    if (stateChange && body.expected_revision !== undefined && body.expected_revision !== task.stateRevision) throw taskChanged();
+    const settings = body.start_today !== undefined || body.due_at !== undefined || body.due_date_only !== undefined ? await getSettings(db, userId) : null;
     let startedOn: string | null | undefined;
-    if (body.start_today !== undefined) {
-      const { timeZone } = await getSettings(db, userId);
-      startedOn = body.start_today ? DateTime.fromJSDate(now, { zone: timeZone }).toISODate() : null;
+    if (body.start_today !== undefined && settings) {
+      startedOn = body.start_today ? DateTime.fromJSDate(now, { zone: settings.timeZone }).toISODate() : null;
     }
+    // A date-only deadline keeps its day at 23:59 local time.
+    const dateOnly = body.due_date_only ?? (body.due_at !== undefined ? false : task.dueDateOnly);
+    const dueAt = body.due_at !== undefined ? body.due_at : body.due_date_only !== undefined ? task.dueAt : undefined;
+    const due =
+      dueAt === undefined
+        ? {}
+        : { dueAt: dueAt && dateOnly && settings ? endOfLocalDay(dueAt, settings.timeZone) : dueAt, dueDateOnly: Boolean(dueAt && dateOnly) };
+    const spent = body.spent_minutes !== undefined ? await correctionFor(db, userId, task, body.spent_minutes, now) : undefined;
     const data: Prisma.TaskUpdateInput = {
       ...(body.done !== undefined && { completedAt: body.done ? (task.completedAt ?? now) : null }),
       ...(body.ignored !== undefined && { ignoredAt: body.ignored ? (task.ignoredAt ?? now) : null }),
       ...(body.progress !== undefined && { progress: body.progress }),
       ...(body.estimated_minutes !== undefined && { estimatedMinutes: body.estimated_minutes }),
-      ...(body.spent_minutes !== undefined && { spentMinutes: body.spent_minutes }),
+      ...(spent !== undefined && { spentMinutes: spent }),
       ...(body.notes !== undefined && { notes: body.notes || null }),
       ...(startedOn !== undefined && { startedOn }),
       ...(body.title !== undefined && { title: body.title }),
       ...(body.type !== undefined && { taskType: body.type }),
-      ...(body.due_at !== undefined && { dueAt: body.due_at }),
+      ...due,
+      ...(stateChange && { stateRevision: { increment: 1 } }),
     };
-    const updated = await db.task.update({ where: { id: task.id }, data, include: taskInclude });
+    let updated;
+    try {
+      updated = await db.task.update({ where: { id: task.id, stateRevision: task.stateRevision }, data, include: taskInclude });
+    } catch (error) {
+      // Another change landed between reading and writing this task.
+      if ((error as { code?: string }).code === "P2025") throw taskChanged();
+      throw error;
+    }
+    if (body.done === true || body.ignored === true) {
+      // Completing or ignoring work ends its timer.
+      await stopTaskTimer(db, userId, task.id, now);
+      updated = await db.task.findUniqueOrThrow({ where: { id: task.id }, include: taskInclude });
+    }
+    if (body.done !== undefined || body.progress !== undefined) {
+      await db.taskProgress.create({
+        data: { userId, taskId: task.id, recordedAt: now, progress: updated.progress, completed: updated.completedAt !== null, origin: "user" },
+      });
+    }
     res.json(presentTask(updated, now));
   });
 
@@ -176,3 +219,6 @@ export function tasksRouter(db: Db): Router {
 
   return router;
 }
+
+/** For AI Chat's confirmed changes (ai/writeTools.ts), which validate like this route. */
+export { changes as taskChangeSchema };

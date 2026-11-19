@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router";
 import { ConnectCanvasForm, SyncProgress } from "../canvas";
 import { BellIcon, ClipboardIcon, FolderIcon, LogoMark } from "../icons";
 import { useConnection, useMe, useSignOut, useSync } from "../queries";
 import { FullPageLoader } from "../shell";
+import { WelcomeBrowserSignIn } from "../sources/welcomeSignIn";
 import { useFocusHeading, usePageTitle } from "../ui";
 
 const STEPS = ["Welcome", "Connect Canvas", "First sync"] as const;
@@ -40,6 +41,10 @@ export function WelcomePage() {
   // The shell is not mounted here, so this page refreshes the data when the first sync ends.
   const sync = useSync(() => {});
   usePageTitle(STEPS[step]);
+  // Browser sign-in connects without the token form: move on once Canvas is connected.
+  useEffect(() => {
+    if (step === 1 && connection.data) setStep(2);
+  }, [step, connection.data]);
   useFocusHeading(step);
 
   if (connection.isPending) return <FullPageLoader />;
@@ -107,6 +112,7 @@ export function WelcomePage() {
               </h1>
               <p className="lead">CanvasWatcher reads your courses with a personal access token that you create in Canvas.</p>
               <ConnectCanvasForm onConnected={() => setStep(2)} onCancel={() => setStep(0)} />
+              <WelcomeBrowserSignIn onConnected={() => void connection.refetch()} />
             </>
           ) : null}
 

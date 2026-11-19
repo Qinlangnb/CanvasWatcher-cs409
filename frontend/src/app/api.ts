@@ -50,10 +50,18 @@ function toApiError(status: number, body: ErrorBody | null): ApiError {
   return new ApiError(status, code, `The request failed (${status}).`);
 }
 
+export interface RequestOptions {
+  method?: string;
+  body?: unknown;
+  /** Extra headers, for example X-AW-Broker on Auth Broker calls. */
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+}
+
 /** Calls the CanvasWatcher API. Sends the CSRF header on changes; returns undefined for 204. */
-export async function request<T>(path: string, options: { method?: string; body?: unknown } = {}): Promise<T> {
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const method = options.method ?? "GET";
-  const headers = new Headers({ Accept: "application/json" });
+  const headers = new Headers({ Accept: "application/json", ...options.headers });
   if (options.body !== undefined) headers.set("Content-Type", "application/json");
   if (MUTATING.has(method)) {
     const csrf = readCsrfCookie(document.cookie);
@@ -66,6 +74,7 @@ export async function request<T>(path: string, options: { method?: string; body?
       headers,
       credentials: "same-origin",
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: options.signal,
     });
   } catch {
     throw new ApiError(0, "NETWORK_ERROR", "Could not reach CanvasWatcher. Check your connection and try again.");
@@ -81,3 +90,30 @@ export const isApiError = (error: unknown, status?: number, code?: string): erro
 
 /** Same-origin URL for links the browser follows itself, such as downloads. */
 export const apiHref = (path: string) => withBasePath(path);
+
+/**
+ * Calls the desktop Auth Broker at an absolute loopback URL: JSON with X-AW-Broker, never cookies, and
+ * a timeout so a missing broker fails quickly.
+ */
+export async function brokerRequest<T>(url: string, options: { method?: string; body?: unknown; timeoutMs: number }): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: options.method ?? "GET",
+      headers: options.body === undefined ? {} : { "Content-Type": "application/json", "X-AW-Broker": "1" },
+      credentials: "omit",
+      cache: "no-store",
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      signal: AbortSignal.timeout(options.timeoutMs),
+    });
+  } catch {
+    throw new ApiError(0, "AUTH_BROKER_UNAVAILABLE", "The Local Auth Broker did not answer.");
+  }
+  const body: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail = (body as { detail?: unknown } | null)?.detail;
+    const code = typeof detail === "string" ? detail : "AUTH_BROKER_ERROR";
+    throw new ApiError(response.status, code, "The Local Auth Broker refused the request.");
+  }
+  return body as T;
+}

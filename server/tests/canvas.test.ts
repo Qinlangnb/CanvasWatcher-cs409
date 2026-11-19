@@ -60,9 +60,10 @@ describe("Canvas connection", () => {
     expect(res.body.connection).toMatchObject({ base_url: CANVAS_ORIGIN, canvas_user_name: "Ada Lovelace", status: "ok" });
     expect(res.body.sync_run).toMatchObject({ trigger: "connect", status: "running" });
 
-    const stored = await db.canvasConnection.findFirstOrThrow();
-    expect(stored.tokenCiphertext).not.toContain(CANVAS_TOKEN);
-    expect(services.secrets.open(stored.tokenCiphertext, stored.userId)).toBe(CANVAS_TOKEN);
+    const stored = await db.canvasCredential.findFirstOrThrow({ where: { method: "PAT" } });
+    expect(stored.secretCiphertext).not.toContain(CANVAS_TOKEN);
+    expect(services.secrets.open(stored.secretCiphertext ?? "", `${stored.userId}:canvas:pat`)).toBe(CANVAS_TOKEN);
+    expect(() => services.secrets.open(stored.secretCiphertext ?? "", stored.userId)).toThrow();
 
     await services.sync.whenIdle();
     const latest = await ada.send("get", "/api/sync/runs/latest");
@@ -84,10 +85,17 @@ describe("Canvas connection", () => {
     expect((await ada.send("get", "/api/courses")).body).toEqual([]);
   });
 
-  it("starts over when a different Canvas account is connected", async () => {
+  it("refuses a token for a different Canvas account and keeps the current one", async () => {
     seedCourse(fakeCanvas);
     const ada = await signUp();
     await connectCanvas(ada);
+    fakeCanvas.extraTokens.set("other-account-token", { id: 99, name: "Someone Else" });
+    const res = await ada.send("put", "/api/canvas/connection", { body: { base_url: CANVAS_ORIGIN, access_token: "other-account-token" } });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("account_mismatch");
+    expect((await ada.send("get", "/api/courses")).body).toHaveLength(1);
+    // Switching accounts means disconnecting (which deletes the data) and connecting again.
+    expect((await ada.send("delete", "/api/canvas/connection")).status).toBe(204);
     fakeCanvas.user = { id: 99, name: "Someone Else" };
     fakeCanvas.courses = [];
     await connectCanvas(ada);
@@ -167,16 +175,17 @@ describe("sync", () => {
     await connectCanvas(ada);
     const [file] = (await ada.send("get", "/api/files")).body.items;
     // What a changed CREDENTIALS_KEY looks like: the stored token no longer opens.
-    await db.canvasConnection.updateMany({ data: { tokenCiphertext: "v1.AAAA.AAAA.AAAA" } });
+    await db.canvasCredential.updateMany({ data: { secretCiphertext: "v1.AAAA.AAAA.AAAA" } });
 
     const download = await ada.send("get", file.download_url);
     expect(download.status).toBe(409);
     expect(download.body.code).toBe("CANVAS_RECONNECT_REQUIRED");
+    expect(await db.canvasCredential.findFirstOrThrow()).toMatchObject({ secretCiphertext: null, failureReason: "UNREADABLE" });
 
     await db.canvasConnection.updateMany({ data: { status: "OK" } });
     const run = await syncNow(ada);
     expect(run.status).toBe("failed");
-    expect(run.error).toContain("can no longer be read");
+    expect(run.error).toContain("sign in again");
     expect((await ada.send("get", "/api/canvas/connection")).body.status).toBe("token_rejected");
   });
 

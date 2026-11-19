@@ -42,10 +42,15 @@ export interface CourseSummary {
 
 export interface Course extends CourseSummary {
   canvas_id: string;
-  term: { name: string; start_at: string | null; end_at: string | null } | null;
+  /** "CS 409" and the section, read from Canvas's code and name. */
+  display_code: string;
+  section: string | null;
+  term: { name: string; start_at: string | null; end_at: string | null; id: string; display_name: string; sort_key: string } | null;
   html_url: string;
   archived: boolean;
   last_seen_at: string;
+  /** Busy travel time before and after this course's class events. */
+  commute_minutes: number;
   counts: { open_tasks: number; unread_changes: number; files: number };
 }
 
@@ -74,8 +79,8 @@ export interface Task {
   estimated_minutes: number | null;
   total_minutes: number;
   remaining_minutes: number;
-  /** What remaining_minutes comes from: the pace so far, the student's estimate, or the type's default. */
-  remaining_basis: "pace" | "estimate" | "default";
+  /** What remaining_minutes comes from: the pace so far, the student's estimate, the AI's estimate, or the type's default. */
+  remaining_basis: "pace" | "estimate" | "ai" | "default";
   /** Minutes the student has spent on it, as they report it. */
   spent_minutes: number;
   /** Canvas score and grade once Canvas shows them; null until graded or while hidden. */
@@ -85,6 +90,16 @@ export interface Task {
   /** Local date (YYYY-MM-DD) the student started it ahead of the plan; that day's plan includes it. */
   started_on: string | null;
   notes: string | null;
+  // --- Tasks parity: timers, revisions, links ---
+  /** Finished timer minutes; spent_minutes adds the manual correction (a running timer is not included). */
+  tracked_minutes: number;
+  manual_adjustment_minutes: number;
+  /** Send back as expected_revision with progress and completion changes. */
+  state_revision: number;
+  /** The validated page the task card opens, or null. */
+  source_url: string | null;
+  /** date_only: the deadline is a day without a time. */
+  deadline_precision: "exact" | "date_only" | null;
 }
 
 export interface TaskChanges {
@@ -99,6 +114,8 @@ export interface TaskChanges {
   title?: string;
   type?: TaskType;
   due_at?: string | null;
+  due_date_only?: boolean;
+  expected_revision?: number;
 }
 
 export interface NewTask {
@@ -108,7 +125,10 @@ export interface NewTask {
   due_at: string | null;
   estimated_minutes: number | null;
   notes: string | null;
+  due_date_only?: boolean;
 }
+
+export type FileType = "lecture" | "homework" | "discussion" | "reading" | "exam" | "solution" | "other";
 
 export interface CourseFile {
   id: number;
@@ -118,7 +138,49 @@ export interface CourseFile {
   size_bytes: number;
   updated_at: string | null;
   download_url: string;
+  /** The student's choice, else the detected type. */
+  type: FileType;
+  detected_type: string;
+  user_override_type: FileType | null;
 }
+
+export interface TaskAttachment {
+  file_id: number;
+  filename: string;
+  download_url: string;
+}
+
+export interface CourseTerm {
+  term_id: string;
+  display_name: string;
+  start_at: string | null;
+  end_at: string | null;
+  sort_key: string;
+  active_course_count: number;
+  archived_course_count: number;
+  is_default: boolean;
+}
+
+/** A task's timer totals (GET /api/tasks/:id/work and friends). */
+export interface WorkSummary {
+  task_id: number;
+  state_revision: number;
+  local_completed: boolean;
+  tracked_minutes: number;
+  manual_adjustment_minutes: number;
+  effective_used_minutes: number;
+  active_session_id: number | null;
+  active_started_at: string | null;
+  active_elapsed_seconds: number;
+  switched_from_task_id?: number | null;
+}
+
+export interface ActiveWork extends WorkSummary {
+  task_title: string;
+  course: CourseSummary;
+}
+
+export type PriorityBucket = "Low" | "Medium" | "High" | "Critical";
 
 export interface FilePage {
   items: CourseFile[];
@@ -155,21 +217,14 @@ export interface Syllabus {
 /** One task with the assignment's description from Canvas. */
 export interface TaskDetail extends Task {
   description: string | null;
+  attachments: TaskAttachment[];
 }
 
 export interface AiStatus {
   enabled: boolean;
   model: string | null;
-}
-
-export interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-}
-
-export interface ChatReply {
-  message: string;
-  tools_used: string[];
+  /** The user's own connection (Settings > AI API) or the server's default. AI Chat types live in aiApi.ts. */
+  source: "own" | "server" | null;
 }
 
 export type ChangeKind = "assignment" | "file" | "announcement";
@@ -185,14 +240,39 @@ export interface Change {
   html_url: string | null;
   detected_at: string;
   read: boolean;
+  /** Taxonomy: what kind of change it is and whether the default "Important" feed shows it. */
+  category: ChangeCategory;
+  importance: "minor" | "important" | "critical";
+  requires_action: boolean;
+  user_facing: boolean;
+  event_label: string;
+  course_code: string;
+  /** "CODE: summary", using the AI review's sentence once there is one. */
+  primary_text: string;
+  ai_summary: string | null;
 }
 
+export type ChangeCategory = "grade" | "deadline" | "file" | "announcement" | "assignment" | "content";
+
 export type ContentValue = string | number | null;
+
+export interface ChangeReview {
+  status: "pending" | "waiting_ai" | "reviewing" | "ready" | "suppressed" | "failed";
+  notify_user: boolean;
+  severity: "low" | "medium" | "high" | "critical" | null;
+  reason: string | null;
+  recommended_action: string | null;
+  reviewed_at: string | null;
+}
 
 export interface ChangeDetail extends Change {
   before: Record<string, ContentValue> | null;
   after: Record<string, ContentValue> | null;
   related_task: Task | null;
+  before_text: string | null;
+  after_text: string | null;
+  review: ChangeReview | null;
+  internals: Record<string, unknown>;
 }
 
 export interface ChangePage {
@@ -219,15 +299,22 @@ export interface TodayItem {
   planned_minutes: number;
   slack_minutes: number | null;
   reasons: TodayReason[];
+  priority_bucket: PriorityBucket;
 }
 
 /** Work due soon; `planned_minutes` is 0 when today's plan doesn't (yet) give it time. */
-export type UpcomingItem = Pick<TodayItem, "task" | "remaining_minutes" | "planned_minutes" | "reasons">;
+export type UpcomingItem = Pick<TodayItem, "task" | "remaining_minutes" | "planned_minutes" | "reasons"> & {
+  priority_bucket: PriorityBucket | null;
+};
 
 export interface Today {
   date: string;
   time_zone: string;
   study_window: { start: string; end: string };
+  /** Today's study intervals: the weekly availability, or the single study window. */
+  study_windows: { start: string; end: string }[];
+  /** availability, calendar (availability less busy events) or fallback (study window and daily goal). */
+  capacity_source: CapacitySource;
   goal_minutes: number;
   free_minutes: number;
   capacity_minutes: number;
@@ -242,16 +329,30 @@ export interface Today {
   events: CalendarEvent[];
 }
 
+export type CapacitySource = "calendar" | "availability" | "fallback";
+
+export type EventType = "class" | "busy" | "personal" | "study" | "other";
+
 export interface CalendarEvent {
   id: number;
+  /** Unique per occurrence; occurrences of a recurring event share `id`. */
+  key: string;
   title: string;
   location: string | null;
+  description: string | null;
   all_day: boolean;
   /** "YYYY-MM-DD" for all-day events, otherwise an ISO instant. */
   start: string;
   /** Exclusive: the day after the last day, or when the event ends. */
   end: string;
   busy: boolean;
+  event_type: EventType;
+  /** IANA zone of the event's wall-clock times; null follows the planning zone. */
+  time_zone: string | null;
+  course: { id: number; code: string } | null;
+  recurrence_rule: string | null;
+  /** The first occurrence of a recurring event; edits change the whole series. */
+  series: { start: string; end: string } | null;
   source: { id: number; name: string } | null;
   /** Only events added by hand can be changed; imported ones follow their file. */
   editable: boolean;
@@ -260,10 +361,16 @@ export interface CalendarEvent {
 export interface EventFields {
   title: string;
   location: string | null;
+  description?: string | null;
   all_day: boolean;
+  /** An instant, a date (all day), or a wall-clock time read in `time_zone`. */
   start: string;
   end: string;
   busy: boolean;
+  time_zone?: string | null;
+  event_type?: EventType;
+  course_id?: number | null;
+  recurrence_rule?: string | null;
 }
 
 export interface CalendarSource {
@@ -271,10 +378,115 @@ export interface CalendarSource {
   name: string;
   file_name: string | null;
   imported_at: string;
+  last_reimported_at: string | null;
   event_count: number;
+  recurring_series_count: number;
+  /** The zone floating times were read in; null when every time named its own. */
+  time_zone: string | null;
+  range_start: string | null;
+  range_end: string | null;
+  read_only: true;
+}
+
+export interface IcsReconciliation {
+  new: number;
+  updated: number;
+  removed: number;
+  unchanged: number;
+}
+
+export interface IcsPreview {
+  file_name: string | null;
+  file_sha256: string;
+  calendar_name: string | null;
+  calendar_time_zone: string | null;
+  time_zone_confirmation_required: boolean;
+  event_count: number;
+  recurring_series_count: number;
+  range_start: string | null;
+  range_end: string | null;
+  reconciliation: IcsReconciliation;
+  no_op: boolean;
+  truncated: boolean;
+  warnings: string[];
 }
 
 export interface CalendarImport extends CalendarSource {
   /** The file had more events than one import keeps. */
   truncated: boolean;
+  preview: IcsPreview;
+}
+
+// --- Important Changes: banners, AI review, noise filters, grading policy ---
+
+export interface AppNotification {
+  id: number;
+  level: "important" | "critical";
+  title: string;
+  body: string;
+  change_id: number | null;
+  created_at: string;
+}
+
+export interface AttentionItem extends ChangeReview {
+  change: Change;
+}
+
+export interface FilterRuleSpec {
+  course_id: number;
+  source_type: string;
+  source_name: string;
+  change_type: string;
+  field: string;
+  operator: string;
+  pattern: string;
+}
+
+export interface FilterRule {
+  id: number;
+  enabled: boolean;
+  removed: boolean;
+  rule: FilterRuleSpec;
+  course_code: string | null;
+  reason: string;
+  created_by: "AI" | "USER";
+  created_at: string;
+  updated_at: string;
+  version: number;
+  match_count: number;
+  last_matched_at: string | null;
+  audit: { actor: string; action: string; reason: string; version: number; created_at: string }[];
+}
+
+export interface ReviewDiagnostic {
+  change_id: number;
+  summary: string;
+  status: string;
+  stage1: string;
+  stage1_reason: string;
+  notify_user: boolean;
+  reason: string | null;
+  matched_rule: { id: number } | null;
+  error: string | null;
+}
+
+export interface ChangeFilters {
+  rules: FilterRule[];
+  recent_reviews: ReviewDiagnostic[];
+}
+
+export interface GradingCategory {
+  id: string;
+  name: string;
+  weight: number | null;
+  drop_lowest: number;
+  drop_highest: number;
+  never_drop: { canvas_id: string; title: string | null }[];
+}
+
+export interface CoursePolicy {
+  source: "canvas";
+  weighted: boolean;
+  fetched_at: string;
+  grading_categories: GradingCategory[];
 }

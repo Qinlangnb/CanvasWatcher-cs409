@@ -2,19 +2,23 @@
 // far, progress, and the assignment's description from Canvas. Used time and progress save here
 // without opening the full editor.
 import { useEffect, useId, useState, type ReactNode } from "react";
-import { TASK_TYPE_LABELS, formatDue, formatMinutes, plural } from "./format";
+import { useReestimate, useTaskSummary } from "./aiApi";
+import { TASK_TYPE_LABELS, formatMinutes, plural } from "./format";
 import { isSubmitted, parseSpent } from "./forms";
 import { CheckIcon } from "./icons";
 import { CanvasLink } from "./preview";
-import { useTaskDetail, useUpdateTask } from "./queries";
+import { useAiStatus, useIsPreview, useTaskDetail, useUpdateTask } from "./queries";
 import { useTaskEditor } from "./tasks";
 import { useToast } from "./toast";
 import type { Task } from "./types";
 import { Badge, Spinner } from "./ui";
+import { AssignmentDownload, CompletionNote, ReopenButton, RevisionProgress, formatTaskDue, useCardOpen } from "./taskExtras";
+import { WorkControl, useRunningMinutes } from "./workTimer";
 
 function basisLabel(task: Task): string {
   if (task.remaining_basis === "pace") return "at your pace so far";
   if (task.remaining_basis === "estimate") return "your estimate";
+  if (task.remaining_basis === "ai") return "AI estimate";
   return `usual for ${(TASK_TYPE_LABELS[task.type] ?? "this type").toLowerCase()}`;
 }
 
@@ -33,21 +37,25 @@ function submissionText(task: Task): string | null {
   return "Not submitted";
 }
 
-/** Minutes used so far: type a total and save it with the check button. */
+/**
+ * Minutes used so far: timer sessions plus a manual correction. Typing a total and saving it changes
+ * only the correction; session history stays as recorded.
+ */
 function UsedTime({ task }: { task: Task }) {
   const update = useUpdateTask();
   const toast = useToast();
   const id = useId();
-  const [value, setValue] = useState(String(task.spent_minutes));
-  useEffect(() => setValue(String(task.spent_minutes)), [task.spent_minutes]);
+  const used = task.spent_minutes + useRunningMinutes(task.id);
+  const [value, setValue] = useState(String(used));
+  useEffect(() => setValue(String(used)), [used]);
   const parsed = parseSpent(value);
-  const dirty = !parsed.error && parsed.minutes !== task.spent_minutes;
+  const dirty = !parsed.error && parsed.minutes !== used;
   const save = () => {
     if (!dirty) return;
     update.mutate(
       { id: task.id, changes: { spent_minutes: parsed.minutes } },
       {
-        onSuccess: () => toast(`Time used saved: ${formatMinutes(parsed.minutes)}`, "success"),
+        onSuccess: () => toast("Used time corrected without rewriting session history.", "success"),
         onError: (error) => toast(error.message, "error"),
       },
     );
@@ -90,36 +98,47 @@ function UsedTime({ task }: { task: Task }) {
   );
 }
 
-/** Progress in 5% steps; saved when the slider is let go. */
-function Progress({ task }: { task: Task }) {
-  const update = useUpdateTask();
-  const toast = useToast();
-  const id = useId();
-  const [value, setValue] = useState(task.progress);
-  useEffect(() => setValue(task.progress), [task.progress]);
-  const commit = () => {
-    if (value === task.progress) return;
-    update.mutate({ id: task.id, changes: { progress: value } }, { onError: (error) => toast(error.message, "error") });
-  };
+/** The AI's short summary of the Canvas description; nothing at all when no AI is available. */
+function AiSummary({ task }: { task: Task }) {
+  const ai = useAiStatus();
+  const summary = useTaskSummary(task.id, task.source === "canvas" && Boolean(ai.data?.enabled));
+  const data = summary.data;
+  if (!data || data.status === "unavailable") return null;
   return (
-    <div className="field range-field task-card-progress">
-      <label htmlFor={id}>
-        Progress <output htmlFor={id}>{value}%</output>
-        {update.isPending ? <Spinner size={14} /> : null}
-      </label>
-      <input
-        id={id}
-        type="range"
-        min={0}
-        max={100}
-        step={5}
-        value={value}
-        onChange={(event) => setValue(Number(event.target.value))}
-        onPointerUp={commit}
-        onKeyUp={commit}
-        onBlur={commit}
-      />
+    <div className="task-card-summary" aria-live="polite">
+      <span className="task-card-summary-label">AI summary</span>
+      {data.status === "ready" ? <p>{data.summary}</p> : null}
+      {data.status === "pending" ? (
+        <p className="muted">
+          <Spinner size={14} /> Summarizing the description…
+        </p>
+      ) : null}
+      {data.status === "failed" ? <p className="muted">No summary this time. Read the description below.</p> : null}
     </div>
+  );
+}
+
+/** Asks for a fresh AI estimate of a Canvas task; shown while the AI's estimate sets the time left. */
+function Reestimate({ task }: { task: Task }) {
+  const reestimate = useReestimate();
+  const toast = useToast();
+  const preview = useIsPreview();
+  const ai = useAiStatus();
+  if (task.source !== "canvas" || task.remaining_basis !== "ai" || preview || !ai.data?.enabled) return null;
+  return (
+    <button
+      type="button"
+      className="button small ghost"
+      disabled={reestimate.isPending}
+      onClick={() =>
+        reestimate.mutate(task.id, {
+          onSuccess: () => toast("Asking AI for a new estimate…", "success"),
+          onError: (error) => toast(error.message, "error"),
+        })
+      }
+    >
+      Re-estimate
+    </button>
   );
 }
 
@@ -131,12 +150,16 @@ export function TaskCard({ task, now, zone, actions }: { task: Task; now: Date; 
   const score = scoreText(task);
   const submission = submissionText(task);
   const description = detail.data?.description;
+  const attachments = detail.data?.attachments ?? [];
+  const card = useCardOpen(task);
   return (
-    <div className="task-card">
+    <div className={`task-card${card.target ? " has-task-target" : ""}`} {...card.handlers}>
+      <WorkControl task={task} />
+      <CompletionNote task={task} />
       <dl className="task-card-facts">
         <div>
           <dt>Due</dt>
-          <dd>{formatDue(task.due_at, now, zone)}</dd>
+          <dd>{formatTaskDue(task, now, zone)}</dd>
         </div>
         {task.points_possible !== null || submission ? (
           <div>
@@ -162,7 +185,8 @@ export function TaskCard({ task, now, zone, actions }: { task: Task; now: Date; 
           </dd>
         </div>
       </dl>
-      {submitted || done ? null : <Progress task={task} />}
+      {submitted || done ? null : <RevisionProgress task={task} />}
+      <AiSummary task={task} />
       {task.source === "canvas" ? (
         <details className="task-card-description">
           <summary>Assignment description</summary>
@@ -173,6 +197,9 @@ export function TaskCard({ task, now, zone, actions }: { task: Task; now: Date; 
       {task.notes ? <p className="task-card-notes pre-wrap">{task.notes}</p> : null}
       <div className="task-card-actions">
         {actions}
+        {attachments.length > 0 ? <AssignmentDownload files={attachments} /> : null}
+        <ReopenButton task={task} />
+        <Reestimate task={task} />
         <button type="button" className="button small ghost" onClick={() => editor.open(task)}>
           Edit
         </button>

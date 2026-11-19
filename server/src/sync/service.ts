@@ -1,5 +1,6 @@
 import type { Logger } from "pino";
-import { CanvasError, openToken, type CanvasClient, type CanvasClientFactory } from "../canvas/client.js";
+import { CanvasError, type CanvasClient } from "../canvas/client.js";
+import type { CanvasCredentials } from "../canvas/credentials.js";
 import { findSyllabus } from "../canvas/syllabus.js";
 import { keepSyllabus, syllabusIsStale } from "../canvas/syllabusStore.js";
 import {
@@ -16,10 +17,16 @@ import {
   type TrackedItem,
 } from "../canvas/normalize.js";
 import type { CanvasAssignment, CanvasCourse, CanvasFile } from "../canvas/types.js";
+import { gradeChange, previousGrades, recordGradeChanges, type GradeChange } from "../changes/grades.js";
+import { saveChanges, type NewChange } from "../changes/review.js";
+import { savePolicy } from "../courses/policy.js";
 import type { Db } from "../db.js";
 import type { Prisma, SyncRun } from "../generated/prisma/client.js";
-import type { ChangeType, ItemKind, SyncStatus, SyncTrigger } from "../generated/prisma/enums.js";
-import type { SecretBox } from "../security/secretBox.js";
+import type { ChangeType, ItemKind, SourceHealth, SyncStatus, SyncTrigger } from "../generated/prisma/enums.js";
+// Tasks parity: past-term courses, assignment attachments and file types.
+import { shouldArchiveNewCourse } from "../courses/terms.js";
+import { detectFileType } from "../files/types.js";
+import { assignmentLinks, saveTaskFileLinks } from "./attachments.js";
 
 const DAY = 24 * 60 * 60_000;
 /** How long a sync may run without renewing its lease before another may take over. */
@@ -32,15 +39,58 @@ const ANNOUNCEMENT_WINDOW_MS = 120 * DAY;
 export interface SyncServiceOptions {
   db: Db;
   logger: Logger;
-  secrets: SecretBox;
-  canvas: CanvasClientFactory;
+  credentials: CanvasCredentials;
 }
+
+/** One Canvas resource a sync could not read, shown in the source's diagnostics. */
+export interface ResourceDiagnostic {
+  resource: string;
+  course: string | null;
+  code: string;
+  http_status: number | null;
+  /** Pages a student may simply not see (403/404): listed, but they do not degrade the source. */
+  optional: boolean;
+}
+
+const MAX_DIAGNOSTICS = 50;
+
+const DIAGNOSTIC_CODES: Record<string, string> = {
+  TOKEN_REJECTED: "auth_required",
+  FORBIDDEN: "permission_denied",
+  NOT_FOUND: "resource_not_found",
+  RATE_LIMITED: "rate_limited",
+  UNREACHABLE: "server_error",
+  BAD_RESPONSE: "invalid_response",
+};
+
+export function diagnosticCode(error: unknown): string {
+  return error instanceof CanvasError ? (DIAGNOSTIC_CODES[error.kind] ?? "invalid_response") : "internal_error";
+}
+
+/** HEALTHY, DEGRADED (some resources failed), AUTH_REQUIRED or ERROR (nothing could be synced). */
+export function classifyHealth(status: SyncStatus, tokenRejected: boolean, diagnostics: ResourceDiagnostic[], coursesSynced: number): SourceHealth {
+  if (tokenRejected) return "AUTH_REQUIRED";
+  if (status === "FAILED") return "ERROR";
+  const problems = diagnostics.filter((row) => !row.optional);
+  if (problems.length === 0) return "HEALTHY";
+  if (coursesSynced === 0 || problems.every((row) => row.resource === "assignment")) return "ERROR";
+  return "DEGRADED";
+}
+
+export const HEALTH_SUMMARIES: Record<SourceHealth, string | null> = {
+  UNKNOWN: null,
+  HEALTHY: null,
+  DEGRADED: "Some resources could not be read. Available course content remains usable.",
+  AUTH_REQUIRED: "Sign in again to resume source synchronization.",
+  ERROR: "Source synchronization failed. Check authentication and retry.",
+};
 
 interface SyncContext {
   userId: string;
   client: CanvasClient;
   baseUrl: string;
   lease: { until: Date };
+  diagnostics: ResourceDiagnostic[];
 }
 
 interface CourseResult {
@@ -81,15 +131,13 @@ async function eachLimit<T>(items: T[], limit: number, work: (item: T) => Promis
 export class SyncService {
   private readonly db: Db;
   private readonly logger: Logger;
-  private readonly secrets: SecretBox;
-  private readonly canvas: CanvasClientFactory;
+  private readonly credentials: CanvasCredentials;
   private readonly inFlight = new Set<Promise<void>>();
 
   constructor(options: SyncServiceOptions) {
     this.db = options.db;
     this.logger = options.logger;
-    this.secrets = options.secrets;
-    this.canvas = options.canvas;
+    this.credentials = options.credentials;
   }
 
   /**
@@ -131,8 +179,8 @@ export class SyncService {
     const due = await this.db.canvasConnection.findMany({
       where: {
         status: "OK",
-        // Preview accounts have no Canvas token to sync with.
-        user: { previewExpiresAt: null },
+        // Preview accounts have no Canvas token to sync with; a disabled Canvas source is skipped.
+        user: { previewExpiresAt: null, sources: { none: { type: "CANVAS", enabled: false } } },
         OR: [{ lastSyncedAt: null }, { lastSyncedAt: { lt: new Date(now.getTime() - intervalMs) } }],
         AND: [{ OR: [{ syncLeaseUntil: null }, { syncLeaseUntil: { lt: now } }] }],
       },
@@ -180,14 +228,12 @@ export class SyncService {
     let tokenRejected = false;
     let coursesSynced = 0;
     let changesDetected = 0;
+    const diagnostics: ResourceDiagnostic[] = [];
+    const client = await this.credentials.routed(userId);
     try {
-      const connection = await this.db.canvasConnection.findUniqueOrThrow({ where: { userId } });
-      const context: SyncContext = {
-        userId,
-        client: this.canvas(connection.baseUrl, openToken(this.secrets, connection.tokenCiphertext, userId)),
-        baseUrl: connection.baseUrl,
-        lease,
-      };
+      if (!client) throw new CanvasError("TOKEN_REJECTED", "Connect Canvas to sync.");
+      if (!client.hasCredential()) throw new CanvasError("TOKEN_REJECTED", "Canvas needs you to sign in again. Open Settings → Sources.");
+      const context: SyncContext = { userId, client, baseUrl: client.connection.baseUrl, lease, diagnostics };
       const courses = (await context.client.courses()).filter(isReadableCourse);
       const problems: string[] = [];
       await eachLimit(courses, COURSE_CONCURRENCY, async (course) => {
@@ -198,7 +244,9 @@ export class SyncService {
           problems.push(...result.problems);
         } catch (courseError) {
           if (isFatal(courseError)) throw courseError;
-          problems.push(`${course.course_code ?? course.name ?? course.id}: ${this.describe(courseError)}`);
+          const label = course.course_code ?? course.name ?? String(course.id);
+          problems.push(`${label}: ${this.describe(courseError)}`);
+          diagnostics.push(diagnostic("course", label, courseError, false));
         }
         await this.renewLease(userId, lease);
       });
@@ -211,8 +259,23 @@ export class SyncService {
       status = "FAILED";
       tokenRejected = isFatal(runError);
       error = this.describe(runError);
+      diagnostics.push(diagnostic("courses", null, runError, false));
     }
+    await client?.flush();
+    if (tokenRejected) await this.credentials.markAuthRequired(userId);
     const finishedAt = new Date();
+    const health = classifyHealth(status, tokenRejected, diagnostics, coursesSynced);
+    await this.db.sourceConnection.updateMany({
+      where: { userId, type: "CANVAS" },
+      data: {
+        lastSyncAt: finishedAt,
+        ...(status === "FAILED" ? {} : { lastSuccessAt: finishedAt, state: "READY" }),
+        lastError: error,
+        health,
+        healthSummary: HEALTH_SUMMARIES[health],
+        diagnostics: diagnostics.slice(0, MAX_DIAGNOSTICS) as unknown as Prisma.InputJsonValue,
+      },
+    });
     await this.db.syncRun.update({
       where: { id: run.id },
       data: { status, error, coursesSynced, changesDetected, finishedAt },
@@ -244,14 +307,20 @@ export class SyncService {
   }
 
   /** Fetches one resource; a page the student may not open is skipped instead of failing the course. */
-  private async section<T>(label: string, fetchRows: () => Promise<T[]>): Promise<Section<T>> {
+  private async section<T>(
+    context: SyncContext,
+    course: string,
+    resource: string,
+    label: string,
+    fetchRows: () => Promise<T[]>,
+  ): Promise<Section<T>> {
     try {
       return { ok: true, rows: await fetchRows() };
     } catch (error) {
       if (isFatal(error)) throw error;
-      if (error instanceof CanvasError && (error.kind === "FORBIDDEN" || error.kind === "NOT_FOUND")) {
-        return { ok: false, problem: null };
-      }
+      const skipped = error instanceof CanvasError && (error.kind === "FORBIDDEN" || error.kind === "NOT_FOUND");
+      context.diagnostics.push(diagnostic(resource, course, error, skipped));
+      if (skipped) return { ok: false, problem: null };
       return { ok: false, problem: `${label}: ${this.describe(error)}` };
     }
   }
@@ -272,25 +341,33 @@ export class SyncService {
     const existing = await this.db.course.findUnique({ where: { userId_canvasId: { userId, canvasId } } });
     const course = existing
       ? await this.db.course.update({ where: { id: existing.id }, data: fields })
-      : await this.db.course.create({ data: { userId, canvasId, ...fields } });
+      : await this.db.course.create({
+          // A course first seen after its term ended (an old enrollment) starts archived.
+          data: { userId, canvasId, ...fields, archivedAt: shouldArchiveNewCourse(fields.termEndAt, now) ? now : null },
+        });
     // The first sync of a course records what exists without reporting all of it as new.
     const baseline = !existing;
 
-    const [assignments, files, announcements] = await Promise.all([
-      this.section("Assignments", () => client.assignments(canvasId)),
-      this.section("Files", () => client.files(canvasId)),
-      this.section("Announcements", () =>
+    const [assignments, files, announcements, groups] = await Promise.all([
+      this.section(context, fields.courseCode, "assignment", "Assignments", () => client.assignments(canvasId)),
+      this.section(context, fields.courseCode, "file", "Files", () => client.files(canvasId)),
+      this.section(context, fields.courseCode, "announcement", "Announcements", () =>
         client.announcements(canvasId, new Date(now.getTime() - ANNOUNCEMENT_WINDOW_MS), new Date(now.getTime() + DAY)),
       ),
+      // Grading policy; a course that hides it is simply left without one.
+      this.section(context, fields.courseCode, "assignment_group", "Assignment groups", () => client.assignmentGroups(canvasId)),
     ]);
 
     const result: CourseResult = { changes: 0, problems: [] };
     const scope = { userId, courseId: course.id, baseline, now };
+    const links = assignments.ok ? assignmentLinks(assignments.rows, canvasId, baseUrl) : null;
     if (assignments.ok) {
       result.changes += await this.db.$transaction(
         async (tx) => {
-          await this.saveTasks(tx, scope, assignments.rows);
-          return this.reconcile(tx, scope, "ASSIGNMENT", assignments.rows.map(trackedAssignment), true);
+          const grades = await this.saveTasks(tx, scope, assignments.rows);
+          await saveTaskFileLinks(tx, userId, course.id, links?.byAssignment ?? new Map());
+          const changes = await this.reconcile(tx, scope, "ASSIGNMENT", assignments.rows.map(trackedAssignment), true);
+          return changes + (await recordGradeChanges(tx, scope, grades));
         },
         { timeout: 30_000 },
       );
@@ -298,7 +375,7 @@ export class SyncService {
     if (files.ok) {
       result.changes += await this.db.$transaction(
         async (tx) => {
-          await this.saveFiles(tx, scope, files.rows);
+          await this.saveFiles(tx, scope, files.rows, links?.contextTitles);
           return this.reconcile(tx, scope, "FILE", files.rows.map((file) => trackedFile(file, fields.htmlUrl)), true);
         },
         { timeout: 30_000 },
@@ -311,6 +388,7 @@ export class SyncService {
         { timeout: 30_000 },
       );
     }
+    if (groups.ok) await savePolicy(this.db, userId, course.id, canvasCourse.apply_assignment_group_weights === true, groups.rows, now);
     for (const section of [assignments, files, announcements]) {
       if (!section.ok && section.problem) result.problems.push(`${fields.courseCode} ${section.problem}`);
     }
@@ -337,8 +415,11 @@ export class SyncService {
     }
   }
 
-  private async saveTasks(tx: Prisma.TransactionClient, scope: Scope, rows: CanvasAssignment[]): Promise<void> {
+  /** Saves the course's Canvas tasks and returns the grades that appeared or changed since the last sync. */
+  private async saveTasks(tx: Prisma.TransactionClient, scope: Scope, rows: CanvasAssignment[]): Promise<GradeChange[]> {
     const { userId, courseId, now } = scope;
+    const previous = await previousGrades(tx, courseId);
+    const grades: GradeChange[] = [];
     for (const assignment of rows) {
       const canvasId = String(assignment.id);
       const title = assignment.name?.trim() || "Untitled assignment";
@@ -360,20 +441,25 @@ export class SyncService {
         create: { userId, courseId, canvasId, ...data },
         update: data,
       });
+      const grade = gradeChange(canvasId, title, previous.get(canvasId), data);
+      if (grade) grades.push(grade);
     }
     // Only Canvas tasks can disappear from Canvas; the student's own tasks are never touched.
     await tx.task.updateMany({
       where: { courseId, source: "CANVAS", removedAt: null, canvasId: { notIn: rows.map((row) => String(row.id)) } },
       data: { removedAt: now },
     });
+    return grades;
   }
 
-  private async saveFiles(tx: Prisma.TransactionClient, scope: Scope, rows: CanvasFile[]): Promise<void> {
+  private async saveFiles(tx: Prisma.TransactionClient, scope: Scope, rows: CanvasFile[], contextTitles?: Map<string, string[]>): Promise<void> {
     const { userId, courseId, now } = scope;
     for (const file of rows) {
       const canvasId = String(file.id);
+      const displayName = file.display_name?.trim() || file.filename || "Untitled file";
       const data = {
-        displayName: file.display_name?.trim() || file.filename || "Untitled file",
+        displayName,
+        detectedType: detectFileType(`${displayName} ${file.filename ?? ""}`, contextTitles?.get(canvasId)),
         contentType: file["content-type"] ?? null,
         sizeBytes: Math.max(0, Math.min(file.size ?? 0, 2 ** 31 - 1)),
         canvasUpdatedAt: dateOrNull(file.modified_at ?? file.updated_at),
@@ -403,13 +489,15 @@ export class SyncService {
     const known = new Map(
       (await tx.sourceItem.findMany({ where: { courseId, kind } })).map((item) => [item.canvasId, item]),
     );
-    const events: Prisma.ChangeEventCreateManyInput[] = [];
+    const events: NewChange[] = [];
     const fresh: TrackedItem[] = [];
     const record = (sourceItemId: number, title: string, changeType: ChangeType, detail: ChangeDetail) =>
       events.push({
         userId,
         courseId,
         sourceItemId,
+        kind,
+        title,
         changeType,
         fields: detail.fields ?? [],
         summary: changeSummary(kind, changeType, title, detail.fields),
@@ -474,9 +562,19 @@ export class SyncService {
       }
     }
 
-    if (events.length > 0) await tx.changeEvent.createMany({ data: events });
-    return events.length;
+    // Saves them with their taxonomy and queues their review; a transition already reported is skipped.
+    return saveChanges(tx, events);
   }
+}
+
+function diagnostic(resource: string, course: string | null, error: unknown, optional: boolean): ResourceDiagnostic {
+  return {
+    resource,
+    course,
+    code: diagnosticCode(error),
+    http_status: error instanceof CanvasError ? error.status : null,
+    optional,
+  };
 }
 
 interface Scope {

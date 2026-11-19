@@ -125,6 +125,9 @@ CI (`.github/workflows/ci.yml`) runs the server checks against a PostgreSQL serv
 | --- | --- |
 | `server/` | Node.js REST API: Express routes, Prisma schema and migrations, preview accounts (`src/preview/`), AI Chat (`src/ai/`), tests, query benchmark (`bench/`) |
 | `frontend/src/app/` | The React interface: `router.tsx` (routes and guards), `pages/`, shared `ui.tsx`, `queries.ts` (React Query hooks), `tasks.tsx` and `events.tsx` (editors), `preview.tsx` (Preview sign-in, banner, dialogs and greyed-out controls), `aiChat.tsx` (the AI Chat drawer), `taskCard.tsx` (a task opened in place), `forms.ts` and `zoned.ts` (pure form and time-zone helpers, unit-tested), `app.css` (design tokens, light and dark) |
+| `frontend/src/app/sources/` | Settings → Sources, the sidebar's SOURCES list and quick panel, the Auth Broker handshake; `registry.tsx` is where other source types plug in their forms |
+| `server/src/canvas/credentials.ts`, `server/src/routes/{canvasAuth,broker,sources}.ts` | Canvas credential slots (PAT, browser session, OAuth) with failover, the Auth Broker protocol, and per-user sources; `server/src/sources/registry.ts` is the extension point for other source types |
+| `auth-broker/` | The desktop Auth Broker for browser sign-in (Python, runs on the student's computer; see its README) |
 | `docs/cs409/` | Rewrite plan, performance measurements, heuristic evaluation kit |
 | `legacy/` | The original Python backend, gateway and deployment files, kept as a porting reference |
 
