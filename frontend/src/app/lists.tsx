@@ -23,6 +23,10 @@ import { TaskCard } from "./taskCard";
 import { TaskCheck, useTaskEditor } from "./tasks";
 import type { Change, ChangeDetail, ChangeKind, ContentValue, Course, CourseFile, Task } from "./types";
 import { Badge, Dialog, QueryError, SkeletonList } from "./ui";
+import { FileMenu } from "./fileTypes";
+import { formatTaskDue } from "./taskExtras";
+import { FILE_TYPE_LABELS } from "./taskHelpers";
+import { useIsWorking } from "./workTimer";
 
 // --- Courses ---
 
@@ -31,9 +35,10 @@ export function CourseCard({ course }: { course: Course }) {
   return (
     <li className="course-card">
       <Link to={`/courses/${course.id}`} className="course-card-link">
-        <span className="course-code">{course.code}</span>
+        <span className="course-code">{course.display_code || course.code}</span>
         <span className="course-name">{course.name}</span>
-        {course.term ? <span className="course-term">{course.term.name}</span> : null}
+        {course.term ? <span className="course-term">{course.term.display_name || course.term.name}</span> : null}
+        <span className="course-section">{course.section ?? "Section not specified"}</span>
       </Link>
       <dl className="course-stats">
         <div>
@@ -85,6 +90,7 @@ export function TaskRow({
   const editor = useTaskEditor();
   const open = task.state === "open" || task.state === "overdue";
   const hint = open && showHint ? dueHint(task.due_at, now, zone) : null;
+  const working = useIsWorking(task.id);
   const panelId = `task-details-${task.id}${anchorId ? "-plan" : ""}`;
   return (
     <li id={anchorId} className={`task-row state-${task.state}${details?.open ? " expanded" : ""}`}>
@@ -116,11 +122,12 @@ export function TaskRow({
           {task.points_possible !== null ? <span>{plural(task.points_possible, "pt")}</span> : null}
           {open && task.progress > 0 ? <span>{task.progress}% done</span> : null}
           {open ? <span>{formatMinutes(task.remaining_minutes)} left</span> : null}
+          {working ? <Badge tone="accent">Working on</Badge> : null}
         </p>
         {extra}
       </div>
       <div className="task-due">
-        <time dateTime={task.due_at ?? undefined}>{formatDue(task.due_at, now, zone)}</time>
+        <time dateTime={task.due_at ?? undefined}>{formatTaskDue(task, now, zone)}</time>
         {task.state === "done" ? <Badge tone="success">{doneLabel(task)}</Badge> : null}
         {task.state === "ignored" ? <Badge>Ignored</Badge> : null}
         {hint ? <Badge tone={hint.tone}>{hint.label}</Badge> : null}
@@ -156,20 +163,24 @@ export function TaskList({
   now,
   showCourse = true,
   expandable = false,
+  actions,
 }: {
   tasks: Task[];
   now: Date;
   showCourse?: boolean;
   /** Titles open the task in place instead of the editor. */
   expandable?: boolean;
+  /** Quick buttons under each row, such as Ignore. */
+  actions?: (task: Task) => ReactNode;
 }) {
+  const extra = (task: Task) => (actions ? <p className="task-quick">{actions(task)}</p> : undefined);
   return (
     <ul className="task-list">
       {tasks.map((task) =>
         expandable ? (
-          <ExpandableTaskRow key={task.id} task={task} now={now} showCourse={showCourse} />
+          <ExpandableTaskRow key={task.id} task={task} now={now} showCourse={showCourse} extra={extra(task)} />
         ) : (
-          <TaskRow key={task.id} task={task} now={now} showCourse={showCourse} />
+          <TaskRow key={task.id} task={task} now={now} showCourse={showCourse} extra={extra(task)} />
         ),
       )}
     </ul>
@@ -177,7 +188,7 @@ export function TaskList({
 }
 
 /** Tasks of one course in the order a student works through them. */
-export function GroupedTasks({ tasks, now }: { tasks: Task[]; now: Date }) {
+export function GroupedTasks({ tasks, now, actions }: { tasks: Task[]; now: Date; actions?: (task: Task) => ReactNode }) {
   const overdue = tasks.filter((task) => task.state === "overdue");
   const upcoming = tasks.filter((task) => task.state === "open" && task.due_at);
   const undated = tasks.filter((task) => task.state === "open" && !task.due_at);
@@ -188,7 +199,7 @@ export function GroupedTasks({ tasks, now }: { tasks: Task[]; now: Date }) {
         <h3>
           {title} <span className="count">{list.length}</span>
         </h3>
-        <TaskList tasks={list} now={now} showCourse={false} />
+        <TaskList tasks={list} now={now} showCourse={false} actions={actions} />
       </section>
     ) : null;
   return (
@@ -480,7 +491,10 @@ export function FileTable({ files, showCourse = true }: { files: CourseFile[]; s
           <tr key={file.id}>
             <th scope="row" className="file-name">
               <FileIcon size={18} />
-              <span>{file.name}</span>
+              <span>
+                {file.name}
+                <span className="file-type">{FILE_TYPE_LABELS[file.type] ?? "Other"}</span>
+              </span>
             </th>
             {showCourse ? (
               <td data-label="Course">
@@ -499,6 +513,7 @@ export function FileTable({ files, showCourse = true }: { files: CourseFile[]; s
             </td>
             <td className="file-action">
               <DownloadButton file={file} />
+              <FileMenu file={file} />
             </td>
           </tr>
         ))}

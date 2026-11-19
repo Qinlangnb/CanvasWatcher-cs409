@@ -1,4 +1,5 @@
 import type { Logger } from "pino";
+import { AiJobs } from "./ai/insights.js";
 import { OpenAiCompatibleProvider, type AiProvider } from "./ai/provider.js";
 import { aiProviderFor } from "./ai/resolve.js";
 import { ChangeReviewWorker } from "./changes/review.js";
@@ -12,10 +13,14 @@ export interface Services {
   secrets: SecretBox;
   canvas: CanvasClientFactory;
   sync: SyncService;
-  /** AI Chat's provider; null when no key is configured. */
+  /** The server-wide AI provider ("Server default"); null when no key is configured. */
   ai: AiProvider | null;
   /** Runs the AI review of Important Changes (changes/review.ts). */
   reviews: ChangeReviewWorker;
+  /** How users' own AI connections are reached (ai/resolve.ts picks the provider per user). */
+  aiOptions: { allowLocal: boolean; fetch: typeof fetch };
+  /** Background AI summaries and effort estimates of tasks. */
+  aiJobs: AiJobs;
 }
 
 export interface ServiceOptions {
@@ -26,9 +31,11 @@ export interface ServiceOptions {
   canvas?: CanvasClientFactory;
   /** Replaces the AI provider, for tests (null turns AI Chat off). */
   ai?: AiProvider | null;
+  /** Replaces fetch for users' own AI providers, for tests. */
+  aiFetch?: typeof fetch;
 }
 
-export function createServices({ config, db, logger, canvas, ai }: ServiceOptions): Services {
+export function createServices({ config, db, logger, canvas, ai, aiFetch }: ServiceOptions): Services {
   const secrets = new SecretBox(config.credentialsKey);
   const factory = canvas ?? ((baseUrl, token) => new CanvasClient({ baseUrl, token }));
   const services: Services = {
@@ -36,8 +43,12 @@ export function createServices({ config, db, logger, canvas, ai }: ServiceOption
     canvas: factory,
     sync: new SyncService({ db, logger, secrets, canvas: factory }),
     ai: ai !== undefined ? ai : config.ai ? new OpenAiCompatibleProvider(config.ai) : null,
+    aiOptions: { allowLocal: config.aiAllowLocal, fetch: aiFetch ?? fetch },
+    aiJobs: undefined as unknown as AiJobs,
     // The provider is looked up per user at review time, so a user who adds an AI later is picked up.
     reviews: new ChangeReviewWorker(db, logger, (userId) => aiProviderFor(db, services, userId)),
   };
+  // The jobs pick each user's provider through these same services.
+  services.aiJobs = new AiJobs(db, logger, services);
   return services;
 }

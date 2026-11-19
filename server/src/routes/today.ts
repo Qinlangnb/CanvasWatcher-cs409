@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { DateTime } from "luxon";
 import { currentAuth } from "../auth/middleware.js";
-import { dateOf, eventsBetween, presentEvent } from "../calendar/events.js";
+import { mergeBusy } from "../calendar/capacity.js";
+import { busyTime, dateOf, loadAvailability, loadCommutes, occurrencesBetween, presentOccurrence } from "../calendar/events.js";
 import type { Db } from "../db.js";
 import { remainingMinutes } from "../tasks/effort.js";
 import { HORIZON_DAYS, OVERDUE_LOOKBACK_DAYS, buildPlan } from "../today/plan.js";
@@ -11,6 +12,14 @@ import { getSettings } from "./settings.js";
 const DAY_MS = 86_400_000;
 /** "Due next week" runs from now through the end of the 7th local day after today. */
 export const UPCOMING_DAYS = 7;
+
+/** The original app's priority buckets over the plan score (0-1). */
+export function priorityBucket(score: number): "Low" | "Medium" | "High" | "Critical" {
+  if (score >= 0.9) return "Critical";
+  if (score >= 0.72) return "High";
+  if (score >= 0.45) return "Medium";
+  return "Low";
+}
 
 export function todayRouter(db: Db): Router {
   const router = Router();
@@ -24,7 +33,8 @@ export function todayRouter(db: Db): Router {
     const dayEnd = today.plus({ days: 1 }).toJSDate();
     const activeCourse = { course: { archivedAt: null } };
 
-    const [tasks, doneToday, events] = await Promise.all([
+    const horizonEnd = today.plus({ days: HORIZON_DAYS + 1 }).toJSDate();
+    const [tasks, doneToday, calendar, commutes, availability] = await Promise.all([
       db.task.findMany({
         where: {
           userId,
@@ -49,14 +59,19 @@ export function todayRouter(db: Db): Router {
         orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
         take: 100,
       }),
-      eventsBetween(db, userId, dayStart, today.plus({ days: HORIZON_DAYS + 1 }).toJSDate(), settings.timeZone),
+      occurrencesBetween(db, userId, dayStart, horizonEnd, settings.timeZone),
+      loadCommutes(db, userId),
+      loadAvailability(db, userId, today.toISODate() as string, today.plus({ days: 366 }).toISODate() as string),
     ]);
 
+    // Busy time includes the commute around classes and short gaps between them.
+    const { busy } = busyTime(calendar.occurrences, calendar.warnings, commutes, { from: dayStart, to: horizonEnd });
     const plan = buildPlan({
       now,
       settings,
       tasks,
-      busy: events.filter((event) => event.busy && !event.allDay).map((event) => ({ start: event.startAt, end: event.endAt })),
+      busy: mergeBusy(busy).map((span) => ({ start: new Date(span.start), end: new Date(span.end) })),
+      availability,
     });
     const byId = new Map(tasks.map((task) => [task.id, task]));
     const planned = new Map(plan.items.map((item) => [item.taskId, item]));
@@ -65,16 +80,17 @@ export function todayRouter(db: Db): Router {
       .filter((task) => task.dueAt !== null && task.dueAt >= now && task.dueAt < upcomingEnd)
       .sort((a, b) => (a.dueAt as Date).getTime() - (b.dueAt as Date).getTime() || a.id - b.id);
     const date = plan.date;
-    const todaysEvents = events.filter((event) =>
-      event.allDay
-        ? dateOf(event.startAt) <= date && dateOf(event.endAt) > date
-        : event.startAt < dayEnd && (event.endAt > dayStart || event.startAt >= dayStart),
+    const todaysEvents = calendar.occurrences.filter(({ event, start, end }) =>
+      event.allDay ? dateOf(start) <= date && dateOf(end) > date : start < dayEnd && (end > dayStart || start >= dayStart),
     );
 
     res.json({
       date,
       time_zone: settings.timeZone,
       study_window: { start: plan.studyWindow.start.toISOString(), end: plan.studyWindow.end.toISOString() },
+      study_windows: plan.studyWindows.map((window) => ({ start: window.start.toISOString(), end: window.end.toISOString() })),
+      /** availability, calendar (availability less busy events) or fallback (study window and daily goal). */
+      capacity_source: plan.capacitySource,
       goal_minutes: plan.goalMinutes,
       free_minutes: plan.freeMinutes,
       capacity_minutes: plan.capacityMinutes,
@@ -83,6 +99,7 @@ export function todayRouter(db: Db): Router {
       items: plan.items.map((item) => ({
         task: presentTask(byId.get(item.taskId) as (typeof tasks)[number], now),
         score: item.score,
+        priority_bucket: priorityBucket(item.score),
         remaining_minutes: item.remainingMinutes,
         planned_minutes: item.plannedMinutes,
         slack_minutes: item.slackMinutes,
@@ -96,11 +113,12 @@ export function todayRouter(db: Db): Router {
           remaining_minutes: item?.remainingMinutes ?? remainingMinutes(task),
           planned_minutes: item?.plannedMinutes ?? 0,
           reasons: item?.reasons ?? [],
+          priority_bucket: item ? priorityBucket(item.score) : null,
         };
       }),
       upcoming_through: new Date(upcomingEnd.getTime() - 1).toISOString(),
       done_today: doneToday.map((task) => presentTask(task, now)),
-      events: todaysEvents.map(presentEvent),
+      events: todaysEvents.map(presentOccurrence),
     });
   });
 

@@ -1,17 +1,16 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation } from "react-router";
+import { AiSettingsSection } from "../aiSettings";
 import { ApiError } from "../api";
 import { ConnectCanvasForm } from "../canvas";
-import { ImportCalendarDialog } from "../events";
+import { AgendaSection, AvailabilitySection, CalendarsSection, CommuteSection } from "../calendarSettings";
 import { EndPreviewDialog, PreviewUnavailable, UnavailableButton } from "../preview";
 import { formatDateTime, formatMinuteOfDay, formatMinutes, plural, syncOutcome, timeAgo } from "../format";
-import { SyncIcon, UploadIcon } from "../icons";
+import { SyncIcon } from "../icons";
 import {
   browserTimeZone,
-  useCalendarSources,
   useChangePassword,
   useConnection,
-  useDeleteCalendarSource,
   useDisconnectCanvas,
   useIsPreview,
   useMe,
@@ -23,7 +22,7 @@ import {
 import { useNow } from "../shell";
 import { ChangeFiltersSection } from "../important";
 import { useToast } from "../toast";
-import type { CalendarSource, PlanSettings } from "../types";
+import type { PlanSettings } from "../types";
 import { Alert, Badge, Dialog, PageHeader, PasswordField, QueryError, SelectField, SkeletonList, Spinner } from "../ui";
 
 function ProfileSection() {
@@ -369,6 +368,7 @@ function StudyPlanForm({ settings }: { settings: PlanSettings }) {
       </div>
       <p className="muted">
         The plan only uses free time inside this window. Busy events from your <Link to="/calendar">calendar</Link> don't count as free.
+        Weekly study availability, when you set it below, replaces this window and goal.
       </p>
       <div className="form-actions">
         <button type="submit" className="button primary" disabled={!dirty || update.isPending || tooShort}>
@@ -394,93 +394,6 @@ function StudyPlanSection() {
       {settings.isError ? <QueryError error={settings.error} retry={() => void settings.refetch()} /> : null}
       {/* A fresh form whenever the saved settings change. */}
       {settings.data ? <StudyPlanForm key={JSON.stringify(settings.data)} settings={settings.data} /> : null}
-    </section>
-  );
-}
-
-function CalendarsSection() {
-  const sources = useCalendarSources();
-  const remove = useDeleteCalendarSource();
-  const toast = useToast();
-  const now = useNow();
-  const [importing, setImporting] = useState(false);
-  const [removing, setRemoving] = useState<CalendarSource | null>(null);
-
-  return (
-    <section className="card settings-section" id="calendars" aria-labelledby="calendars-heading">
-      <h2 id="calendars-heading">Calendars</h2>
-      <p className="muted">
-        Imported .ics files. To update one, remove it and import a new export. Events you add by hand live on the{" "}
-        <Link to="/calendar">Calendar</Link> page.
-      </p>
-      {sources.isPending ? <SkeletonList rows={2} label="Loading calendars" /> : null}
-      {sources.isError ? <QueryError error={sources.error} retry={() => void sources.refetch()} /> : null}
-      {sources.data?.length === 0 ? <p className="inline-note">No calendars imported yet.</p> : null}
-      {sources.data && sources.data.length > 0 ? (
-        <ul className="source-list">
-          {sources.data.map((source) => (
-            <li key={source.id}>
-              <div className="source-text">
-                <p className="source-name">{source.name}</p>
-                <p className="muted">
-                  {plural(source.event_count, "event")} · imported{" "}
-                  <time dateTime={source.imported_at} title={formatDateTime(source.imported_at)}>
-                    {timeAgo(source.imported_at, now)}
-                  </time>
-                  {source.file_name ? ` from ${source.file_name}` : ""}
-                </p>
-              </div>
-              <button type="button" className="button small danger-ghost" onClick={() => setRemoving(source)}>
-                Remove<span className="visually-hidden"> {source.name}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      <div className="form-actions">
-        <button type="button" className="button secondary" onClick={() => setImporting(true)}>
-          <UploadIcon size={18} />
-          Import .ics
-        </button>
-      </div>
-
-      <ImportCalendarDialog open={importing} onClose={() => setImporting(false)} />
-      <Dialog
-        open={removing !== null}
-        onClose={() => setRemoving(null)}
-        title={`Remove “${removing?.name ?? ""}”?`}
-        size="small"
-        footer={
-          <>
-            <button type="button" className="button ghost" onClick={() => setRemoving(null)}>
-              Keep it
-            </button>
-            <button
-              type="button"
-              className="button danger"
-              disabled={remove.isPending}
-              onClick={() =>
-                removing &&
-                remove.mutate(removing.id, {
-                  onSuccess: () => {
-                    toast(`Removed ${removing.name}.`);
-                    setRemoving(null);
-                  },
-                  onError: (error) => toast(error.message, "error"),
-                })
-              }
-            >
-              {remove.isPending ? <Spinner size={16} /> : null}
-              Remove calendar
-            </button>
-          </>
-        }
-      >
-        <p>
-          Its {plural(removing?.event_count ?? 0, "event")} leave your calendar and stop taking time from your plan. Events you added by hand
-          stay.
-        </p>
-      </Dialog>
     </section>
   );
 }
@@ -570,11 +483,15 @@ export function SettingsPage() {
   }, [location.hash, preview]);
   return (
     <div className="page">
-      <PageHeader title="Settings" description="Your study plan, calendars, account and the Canvas connection." />
+      <PageHeader title="Settings" description="Your study plan, calendars, account, the Canvas connection and AI." />
       <div className="settings-grid">
         <StudyPlanSection />
+        <AvailabilitySection />
+        <CommuteSection />
         <CalendarsSection />
+        <AgendaSection />
         <CanvasSection />
+        <AiSettingsSection />
         <ProfileSection />
         {preview ? null : <PasswordSection />}
         <ChangeFiltersSection />

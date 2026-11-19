@@ -211,10 +211,13 @@ describe("calendar", () => {
     });
     expect(backwards.status).toBe(422);
     expect(backwards.body.detail[0].loc).toEqual(["body", "end"]);
-    const naive = await ada.send("post", "/api/calendar/events", {
+    // Wall-clock times without an offset are read in the user's zone (Chicago by default).
+    const local = await ada.send("post", "/api/calendar/events", {
       body: { title: "No zone", start: "2026-11-06T09:00:00", end: "2026-11-06T10:00:00" },
     });
-    expect(naive.body.detail[0].loc).toEqual(["body", "start"]);
+    expect(local.body.start).toBe("2026-11-06T15:00:00.000Z");
+    const malformed = await ada.send("post", "/api/calendar/events", { body: { title: "Bad", start: "next Friday", end: "2026-11-06T10:00" } });
+    expect(malformed.body.detail[0].loc).toEqual(["body", "start"]);
     const wide = await ada.send("get", `/api/calendar/events?from=${encodeURIComponent(fromNow(0))}&to=${encodeURIComponent(fromNow(90 * DAY))}`);
     expect(wide.status).toBe(400);
   });
