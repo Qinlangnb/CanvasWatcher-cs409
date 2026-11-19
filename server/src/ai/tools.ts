@@ -7,6 +7,7 @@ import { availabilityOn, subtract } from "../calendar/capacity.js";
 import { blocksText } from "../canvas/richText.js";
 import { findSyllabus, type Syllabus } from "../canvas/syllabus.js";
 import { keepSyllabus, keptSyllabus } from "../canvas/syllabusStore.js";
+import { isWebsiteCourse, withWebsiteSources } from "../sources/website/syllabus.js";
 import { occurrencesBetween, planningInputs } from "../calendar/events.js";
 import type { Db } from "../db.js";
 import type { Prisma } from "../generated/prisma/client.js";
@@ -248,6 +249,10 @@ function taskFacts(task: TaskWithCourse, ctx: ToolContext) {
 async function readSyllabus(ctx: ToolContext, course: { id: number; canvasId: string; htmlUrl: string }): Promise<{ syllabus: Syllabus; fetchedAt: Date } | null> {
   const kept = await keptSyllabus(ctx.db, ctx.userId, course.id);
   if (ctx.preview) return kept;
+  if (isWebsiteCourse(course)) {
+    const syllabus = await withWebsiteSources(ctx.db, ctx.userId, course.id, { found: false, sources: [] });
+    return { syllabus, fetchedAt: ctx.now };
+  }
   if (kept && ctx.now.getTime() - kept.fetchedAt.getTime() < 6 * 60 * 60_000) return kept;
   const connection = await ctx.db.canvasConnection.findUnique({ where: { userId: ctx.userId } });
   if (!connection || connection.status !== "OK") return kept;
@@ -258,7 +263,7 @@ async function readSyllabus(ctx: ToolContext, course: { id: number; canvasId: st
       where: { userId: ctx.userId, courseId: course.id, removedAt: null },
       select: { id: true, canvasId: true, displayName: true },
     });
-    const syllabus = await findSyllabus(client, course.canvasId, course.htmlUrl, files);
+    const syllabus = await withWebsiteSources(ctx.db, ctx.userId, course.id, await findSyllabus(client, course.canvasId, course.htmlUrl, files));
     await keepSyllabus(ctx.db, ctx.userId, course.id, syllabus, ctx.now);
     return { syllabus, fetchedAt: ctx.now };
   } catch {

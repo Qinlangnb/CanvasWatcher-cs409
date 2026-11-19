@@ -45,6 +45,8 @@ export interface CrawlConfig {
 
 export interface CrawledPage {
   url: string;
+  /** Where the page ended up after same-scope redirects; relative links resolve against it. */
+  finalUrl: string;
   title: string;
   text: string;
   blocks: Block[];
@@ -263,6 +265,7 @@ export class WebsiteCrawler {
       const document = parseHtml(source);
       pages.push({
         url,
+        finalUrl: pageUrl,
         title: normalizeText(documentTitle(document) ?? "") || title,
         text: cleanText(document),
         blocks: htmlBlocks(source),

@@ -27,6 +27,8 @@ export function classify(kind: ItemKind, changeType: ChangeType, fields: string[
     return { category: "grade", importance: "important", requiresAction: false, userFacing: true };
   }
   if (kind === "FILE") return { category: "file", importance: "minor", requiresAction: false, userFacing: changeType === "CREATED" };
+  // Website page edits are kept in the full list; they are rarely news on their own.
+  if (kind === "PAGE") return { category: "content", importance: "minor", requiresAction: false, userFacing: false };
   if (kind === "ANNOUNCEMENT") {
     return { category: "announcement", importance: "minor", requiresAction: false, userFacing: changeType === "CREATED" };
   }
@@ -63,6 +65,9 @@ const LABELS: Record<string, string> = {
   assignment_created: "New assignment",
   assignment_updated: "Assignment updated",
   assignment_removed: "Assignment removed",
+  page_created: "New page",
+  page_updated: "Page updated",
+  page_removed: "Page removed",
 };
 
 export function eventLabel(name: string): string {
@@ -88,6 +93,8 @@ const SNAPSHOT_LABELS: Record<string, string> = {
   points_possible: "Points",
   size: "Size (bytes)",
   content_type: "File type",
+  text: "Text",
+  url: "Address",
   updated_at: "Updated",
   posted_at: "Posted",
   score: "Score",
@@ -103,7 +110,7 @@ export function snapshotText(content: Content | null | undefined): string | null
   const lines: string[] = [];
   const long: string[] = [];
   for (const [key, value] of Object.entries(content)) {
-    if (key === "description" || key === "message") {
+    if (key === "description" || key === "message" || key === "text") {
       if (typeof value === "string" && value.trim()) long.push(value);
       continue;
     }

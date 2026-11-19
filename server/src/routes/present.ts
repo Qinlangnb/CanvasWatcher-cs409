@@ -181,6 +181,9 @@ export function presentFile(file: CourseFile & { course: CourseSummary }) {
     type: effectiveFileType(file),
     detected_type: file.detectedType,
     user_override_type: file.userOverrideType,
+    /** canvas, or website for a file a course website crawl downloaded (and checked). */
+    source: file.sourceId ? ("website" as const) : ("canvas" as const),
+    integrity_status: file.integrityStatus,
   };
 }
 

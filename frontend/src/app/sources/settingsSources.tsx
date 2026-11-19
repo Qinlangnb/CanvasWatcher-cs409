@@ -4,12 +4,13 @@ import { ApiError } from "../api";
 import { DEFAULT_CANVAS_URL } from "../canvas";
 import { PlusIcon } from "../icons";
 import { UnavailableButton } from "../preview";
+import { SyncIcon } from "../icons";
 import { Alert, Badge, Dialog, EmptyState, Field, QueryError, SkeletonList, Spinner } from "../ui";
 import { AuthBrokerPanel, BrowserSignIn } from "./broker";
 import { CanvasEditDialog, CanvasSourceCard } from "./canvasCard";
-import { SOURCE_TYPE_LABELS, sourceState, sourceTone, TONE_BADGE, type SourceConnection, type SourceType } from "./model";
+import { SOURCE_TYPE_LABELS, sourceState, sourceTone, syncFeedback, TONE_BADGE, type SourceConnection, type SourceType } from "./model";
 import "./plugins";
-import { useCanvasStatus, useCreateCanvasSource, useCredentialStorage, useSources, useSourcesLocked } from "./queries";
+import { useCanvasStatus, useCreateCanvasSource, useCredentialStorage, useDeleteSource, useSources, useSourcesLocked, useSyncSource } from "./queries";
 import { COMING_SOON, SOURCE_TYPES, sourceUi } from "./registry";
 
 /** Where credentials live. Here they are always sealed in the database. */
@@ -50,6 +51,7 @@ export function SourcesSection() {
   }, [params, sources.data, setParams]);
 
   const editingSource = sources.data?.find((source) => source.id === editing) ?? null;
+  const EditDialog = editingSource && editingSource.source_type !== "canvas" ? sourceUi(editingSource.source_type)?.EditDialog : undefined;
 
   return (
     <section className="card settings-section sources-section" id="sources" aria-labelledby="sources-heading">
@@ -93,6 +95,7 @@ export function SourcesSection() {
       {editingSource?.source_type === "canvas" ? (
         <CanvasEditDialog source={editingSource} status={status.data} open onClose={() => setEditing(null)} />
       ) : null}
+      {editingSource && EditDialog && !locked ? <EditDialog source={editingSource} open onClose={() => setEditing(null)} /> : null}
     </section>
   );
 }
@@ -123,7 +126,92 @@ function ConnectionCard({ source }: { source: SourceConnection }) {
       {provider && source.supported ? <BrowserSignIn provider={source.source_type} credentialId={source.id} /> : null}
       {ui?.CardExtras ? <ui.CardExtras source={source} /> : null}
       {!source.supported ? <p className="inline-note">{COMING_SOON}.</p> : null}
+      {source.supported ? <ConnectionActions source={source} /> : null}
     </article>
+  );
+}
+
+/** Sync now (records health and diagnostics like the scheduler) and Remove, for every non-Canvas source. */
+function ConnectionActions({ source }: { source: SourceConnection }) {
+  const locked = useSourcesLocked();
+  const sync = useSyncSource();
+  const remove = useDeleteSource();
+  const [confirming, setConfirming] = useState(false);
+  const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const run = () => {
+    setMessage(null);
+    sync.mutate(source, {
+      onSuccess: (result) => {
+        const feedback = syncFeedback(result);
+        setMessage({ ok: feedback.ok, text: feedback.message });
+      },
+      onError: (error) => setMessage({ ok: false, text: syncFeedback(null, error).message }),
+    });
+  };
+  // The Gradescope card has its own "Sync mapped courses"; PrairieLearn has nothing to sync yet.
+  const syncable = source.source_type === "website";
+  return (
+    <>
+      {message ? (
+        <p className={message.ok ? "inline-note" : "form-error"} role={message.ok ? "status" : "alert"}>
+          {message.text}
+        </p>
+      ) : null}
+      <div className="form-actions source-card-actions">
+        {locked ? (
+          <>
+            {syncable ? (
+              <UnavailableButton className="button secondary small">
+                <SyncIcon size={16} />
+                Sync now
+              </UnavailableButton>
+            ) : null}
+            <UnavailableButton className="button ghost small">Remove</UnavailableButton>
+          </>
+        ) : (
+          <>
+            {syncable ? (
+              <button type="button" className="button secondary small" onClick={run} disabled={sync.isPending || !source.enabled}>
+                {sync.isPending ? <Spinner size={14} /> : <SyncIcon size={16} />}
+                {sync.isPending ? "Syncing…" : "Sync now"}
+              </button>
+            ) : null}
+            <button type="button" className="button ghost small" onClick={() => setConfirming(true)}>
+              Remove
+            </button>
+          </>
+        )}
+      </div>
+      <Dialog
+        open={confirming}
+        onClose={() => setConfirming(false)}
+        title={`Remove ${source.name}?`}
+        size="small"
+        footer={
+          <>
+            <button type="button" className="button ghost" onClick={() => setConfirming(false)}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="button danger"
+              disabled={remove.isPending}
+              onClick={() => remove.mutate(source.id, { onSuccess: () => setConfirming(false) })}
+            >
+              {remove.isPending ? <Spinner size={16} /> : null}
+              Remove source
+            </button>
+          </>
+        }
+      >
+        <p>
+          {source.source_type === "website"
+            ? "Its saved password, pages and downloaded files are deleted. A course this website created is removed with it."
+            : "Its saved browser session, course links and source facts are deleted, with the tasks it created. Your other tasks stay."}
+        </p>
+        {remove.error ? <Alert>{remove.error.message}</Alert> : null}
+      </Dialog>
+    </>
   );
 }
 

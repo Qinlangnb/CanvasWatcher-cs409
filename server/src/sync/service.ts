@@ -27,6 +27,7 @@ import type { ChangeType, ItemKind, SourceHealth, SyncStatus, SyncTrigger } from
 import { shouldArchiveNewCourse } from "../courses/terms.js";
 import { detectFileType } from "../files/types.js";
 import { assignmentLinks, saveTaskFileLinks } from "./attachments.js";
+import { withWebsiteSources } from "../sources/website/syllabus.js";
 
 const DAY = 24 * 60 * 60_000;
 /** How long a sync may run without renewing its lease before another may take over. */
@@ -286,7 +287,7 @@ export class SyncService {
     });
     if (released.count === 0 && (await this.db.canvasConnection.count({ where: { userId } })) === 0) {
       // The user disconnected while this sync ran; drop what it wrote afterwards.
-      await this.db.course.deleteMany({ where: { userId } });
+      await this.db.course.deleteMany({ where: { userId, source: "CANVAS" } });
     }
     this.logger.info({ runId: run.id, status, coursesSynced, changesDetected }, "sync finished");
   }
@@ -407,7 +408,7 @@ export class SyncService {
         where: { userId: context.userId, courseId: course.id, removedAt: null },
         select: { id: true, canvasId: true, displayName: true },
       });
-      const syllabus = await findSyllabus(context.client, course.canvasId, course.htmlUrl, files);
+      const syllabus = await withWebsiteSources(this.db, context.userId, course.id, await findSyllabus(context.client, course.canvasId, course.htmlUrl, files));
       await keepSyllabus(this.db, context.userId, course.id, syllabus, now);
     } catch (error) {
       if (isFatal(error)) throw error;
@@ -434,6 +435,8 @@ export class SyncService {
         score: typeof assignment.submission?.score === "number" ? assignment.submission.score : null,
         grade: assignment.submission?.grade ?? null,
         excused: assignment.submission?.excused === true,
+        // Kept outside the change-tracked content: it only binds Gradescope assignments to this task.
+        externalToolUrl: assignment.external_tool_tag_attributes?.url ?? null,
         removedAt: null,
       };
       await tx.task.upsert({
@@ -472,7 +475,7 @@ export class SyncService {
       });
     }
     await tx.courseFile.updateMany({
-      where: { courseId, removedAt: null, canvasId: { notIn: rows.map((row) => String(row.id)) } },
+      where: { courseId, removedAt: null, sourceId: null, canvasId: { notIn: rows.map((row) => String(row.id)) } },
       data: { removedAt: now },
     });
   }
@@ -487,7 +490,8 @@ export class SyncService {
   ): Promise<number> {
     const { userId, courseId, baseline, now } = scope;
     const known = new Map(
-      (await tx.sourceItem.findMany({ where: { courseId, kind } })).map((item) => [item.canvasId, item]),
+      // Items of a course website or Gradescope in the same course are theirs to reconcile.
+      (await tx.sourceItem.findMany({ where: { courseId, kind, sourceId: null } })).map((item) => [item.canvasId, item]),
     );
     const events: NewChange[] = [];
     const fresh: TrackedItem[] = [];

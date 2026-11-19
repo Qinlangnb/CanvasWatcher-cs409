@@ -3,7 +3,7 @@
 // without opening the full editor.
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { useReestimate, useTaskSummary } from "./aiApi";
-import { TASK_TYPE_LABELS, formatMinutes, plural } from "./format";
+import { TASK_TYPE_LABELS, formatDateTime, formatMinutes, plural } from "./format";
 import { isSubmitted, parseSpent } from "./forms";
 import { CheckIcon } from "./icons";
 import { CanvasLink } from "./preview";
@@ -14,6 +14,8 @@ import type { Task } from "./types";
 import { Badge, Spinner } from "./ui";
 import { AssignmentDownload, CompletionNote, ReopenButton, RevisionProgress, formatTaskDue, useCardOpen } from "./taskExtras";
 import { WorkControl, useRunningMinutes } from "./workTimer";
+import { PROVIDER_LABELS, hasProviderFacts, sourceFactsTitle, submissionLabel } from "./sources/model";
+import { useSources, useTaskProviderFacts } from "./sources/queries";
 
 function basisLabel(task: Task): string {
   if (task.remaining_basis === "pace") return "at your pace so far";
@@ -142,6 +144,37 @@ function Reestimate({ task }: { task: Task }) {
   );
 }
 
+/** What Canvas and Gradescope each say about the task, once a Gradescope assignment is bound to it. */
+function SourceFacts({ task }: { task: Task }) {
+  const sources = useSources();
+  const watched = Boolean(sources.data?.some((source) => source.source_type === "gradescope"));
+  const facts = useTaskProviderFacts(task.id, watched && (task.source === "canvas" || task.source === "gradescope"));
+  if (!facts.data || !hasProviderFacts(facts.data)) return null;
+  return (
+    <details className="provider-facts">
+      <summary>{sourceFactsTitle(facts.data)}</summary>
+      <ul>
+        {facts.data.provider_facts.map((row) => (
+          <li key={`${row.provider}-${row.source_item_id}`}>
+            <strong>{PROVIDER_LABELS[row.provider] ?? row.provider}</strong>
+            <Badge tone={row.submission_state === "graded" || row.submission_state === "submitted" ? "success" : "neutral"}>
+              {submissionLabel(row.submission_state)}
+            </Badge>
+            <span>Due: {row.due_at ? formatDateTime(row.due_at) : "unknown"}</span>
+            {row.late_due_at ? <span>Late cutoff: {formatDateTime(row.late_due_at)}</span> : null}
+            {row.score !== null && row.score !== undefined ? (
+              <span>
+                Score: {row.score}
+                {row.max_score !== null && row.max_score !== undefined ? ` / ${row.max_score}` : ""}
+              </span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 export function TaskCard({ task, now, zone, actions }: { task: Task; now: Date; zone: string; actions?: ReactNode }) {
   const editor = useTaskEditor();
   const detail = useTaskDetail(task.id, task.source === "canvas");
@@ -187,6 +220,7 @@ export function TaskCard({ task, now, zone, actions }: { task: Task; now: Date; 
       </dl>
       {submitted || done ? null : <RevisionProgress task={task} />}
       <AiSummary task={task} />
+      <SourceFacts task={task} />
       {task.source === "canvas" ? (
         <details className="task-card-description">
           <summary>Assignment description</summary>

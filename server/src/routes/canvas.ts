@@ -27,7 +27,8 @@ export async function disconnectCanvas(db: Db, userId: string): Promise<void> {
     db.canvasCredential.deleteMany({ where: { userId } }),
     db.canvasOAuthState.deleteMany({ where: { userId } }),
     db.sourceConnection.deleteMany({ where: { userId, type: "CANVAS" } }),
-    db.course.deleteMany({ where: { userId } }),
+    // Courses a course website created belong to that source, not to Canvas.
+    db.course.deleteMany({ where: { userId, source: "CANVAS" } }),
     db.syncRun.deleteMany({ where: { userId } }),
   ]);
 }

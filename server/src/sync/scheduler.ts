@@ -1,10 +1,11 @@
 import type { Logger } from "pino";
+import type { SourceSyncs } from "../sources/run.js";
 import type { SyncService } from "./service.js";
 
 const TICK_MS = 60_000;
 
 /** Every minute, starts syncs for connections not synced within the interval. Returns a stop function. */
-export function startScheduler(sync: SyncService, intervalMinutes: number, logger: Logger): () => void {
+export function startScheduler(sync: SyncService, intervalMinutes: number, logger: Logger, sources?: SourceSyncs): () => void {
   if (intervalMinutes <= 0) return () => {};
   const tick = () => {
     sync
@@ -13,6 +14,13 @@ export function startScheduler(sync: SyncService, intervalMinutes: number, logge
         if (started > 0) logger.info({ started }, "scheduled syncs started");
       })
       .catch((error: unknown) => logger.error({ err: error }, "sync scheduler failed"));
+    // Course websites and Gradescope follow the same interval.
+    sources
+      ?.startDue(intervalMinutes * 60_000)
+      .then((started) => {
+        if (started > 0) logger.info({ started }, "scheduled source syncs started");
+      })
+      .catch((error: unknown) => logger.error({ err: error }, "source sync scheduler failed"));
   };
   const timer = setInterval(tick, TICK_MS);
   timer.unref();

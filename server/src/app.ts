@@ -13,6 +13,7 @@ import { BROKER_BOUNDARY_PATHS, brokerBoundaryRouter, brokerRouter } from "./rou
 import { canvasRouter } from "./routes/canvas.js";
 import { canvasAuthRouter, canvasOAuthCallback } from "./routes/canvasAuth.js";
 import { credentialStorage, sourcesRouter } from "./routes/sources.js";
+import { taskFactsRouter, websiteSourcesRouter } from "./routes/websites.js";
 import { changesRouter } from "./routes/changes.js";
 import { coursesRouter } from "./routes/courses.js";
 import { aiRouter } from "./routes/ai.js";
@@ -90,6 +91,7 @@ export function createApp({ config, db, logger, services }: AppDependencies): Ex
   app.use("/api/tasks", requireUser, aiTasksRouter(db, services));
   app.use("/api/settings/ai", requireUser, aiSettingsRouter(db, services));
   app.use("/api/today", requireUser, services.aiJobs.afterToday());
+  app.use("/api/tasks", requireUser, taskFactsRouter(db));
   app.use("/api/tasks", requireUser, tasksRouter(db));
   app.use("/api/files", requireUser, filesRouter(db, services));
   app.use("/api/changes", requireUser, changesRouter(db));
@@ -98,6 +100,8 @@ export function createApp({ config, db, logger, services }: AppDependencies): Ex
   app.use("/api/calendar", requireUser, calendarRouter(db));
   app.use("/api/auth/canvas", requireUser, canvasAuthRouter(db, config, services));
   app.use("/api/auth/broker", requireUser, brokerRouter(db, config, services, challenges));
+  // Course websites and Gradescope add their own routes before the generic source routes.
+  app.use("/api/sources", requireUser, websiteSourcesRouter(db, services));
   app.use("/api/sources", requireUser, sourcesRouter(db, config, services));
   app.get("/api/settings/credential-storage", requireUser, (_req, res) => {
     res.json(credentialStorage());

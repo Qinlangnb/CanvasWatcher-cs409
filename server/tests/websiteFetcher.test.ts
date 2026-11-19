@@ -2,7 +2,7 @@ import http from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { ntlmExchange, probeWebsite, ResourceFetcher, WebsiteProbeError, type AuthRule } from "../src/sources/website/fetcher.js";
-import { DEFAULT_LIMITS, nodeTransport } from "../src/sources/website/http.js";
+import { DEFAULT_LIMITS, isPrivateAddress, nodeTransport } from "../src/sources/website/http.js";
 import { inAuthScope, normalizedHttpUrl, normalizedProbeUrl, protectedPrefix, websiteNtlmScope } from "../src/sources/website/scope.js";
 import { canonicalizeUrl, contentHash, normalizeText } from "../src/sources/website/normalize.js";
 import { fakeSite } from "./sourcesFakes.js";
@@ -258,7 +258,7 @@ describe("node transport on real sockets", () => {
       else if (request.url === "/slow") setTimeout(() => response.end("late"), 500);
       else response.end("ok");
     });
-    const connection = nodeTransport().open({ maxSockets: 1 });
+    const connection = nodeTransport({ allowPrivate: true }).open({ maxSockets: 1 });
     try {
       expect((await connection.get(origin + "/redirect", {}, DEFAULT_LIMITS)).status).toBe(302);
       await expect(connection.get(origin + "/big", {}, { ...DEFAULT_LIMITS, maxBytes: 1_000 })).rejects.toThrow("response_too_large");
@@ -267,6 +267,19 @@ describe("node transport on real sockets", () => {
     } finally {
       connection.close();
     }
+    // By default a user-entered address can't reach loopback, private networks or cloud metadata.
+    const guarded = nodeTransport().open({ maxSockets: 1 });
+    try {
+      await expect(guarded.get(origin + "/", {}, DEFAULT_LIMITS)).rejects.toThrow("address_not_allowed");
+      await expect(guarded.get("http://169.254.169.254/latest", {}, DEFAULT_LIMITS)).rejects.toThrow("address_not_allowed");
+      await expect(guarded.get("http://localhost:1/", {}, DEFAULT_LIMITS)).rejects.toThrow("address_not_allowed");
+      await expect(guarded.get("http://[::ffff:10.0.0.1]/", {}, DEFAULT_LIMITS)).rejects.toThrow("address_not_allowed");
+    } finally {
+      guarded.close();
+    }
+    expect(isPrivateAddress("8.8.8.8")).toBe(false);
+    expect(isPrivateAddress("172.20.1.1")).toBe(true);
+    expect(isPrivateAddress("fd00::1")).toBe(true);
   });
 
   it("keeps the NTLM handshake on one keep-alive socket", async () => {
@@ -282,7 +295,7 @@ describe("node transport on real sockets", () => {
       const reply = await fakeConnections.get(socket)!.get("https://fake" + request.url, headers, DEFAULT_LIMITS);
       response.writeHead(reply.status, reply.headers as http.OutgoingHttpHeaders).end(reply.body);
     });
-    const connection = nodeTransport().open({ maxSockets: 1 });
+    const connection = nodeTransport({ allowPrivate: true }).open({ maxSockets: 1 });
     try {
       const result = await ntlmExchange(connection, origin + "/secure", "NTLM", ACCOUNT, DEFAULT_LIMITS);
       expect(result).toMatchObject({ status: "ok", authenticated: true });

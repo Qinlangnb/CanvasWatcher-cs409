@@ -2,7 +2,19 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { brokerRequest, request } from "../api";
 import { invalidateCanvasData, keys as appKeys, useIsPreview } from "../queries";
 import type { SyncRun } from "../types";
-import type { BrokerHealth, CanvasAuthStatus, CanvasMethod, SourceConnection } from "./model";
+import type {
+  BrokerHealth,
+  CanvasAuthStatus,
+  CanvasMethod,
+  ProviderAssignmentRow,
+  ProviderCourse,
+  ProviderCourseMapping,
+  ProviderType,
+  SourceConnection,
+  TaskProviderFacts,
+  WebsiteDetails,
+  WebsiteVerification,
+} from "./model";
 
 const BROKER = { "X-AW-Broker": "1" };
 
@@ -160,3 +172,113 @@ export const brokerApi = {
 
 /** Preview accounts see every source control greyed out. */
 export const useSourcesLocked = useIsPreview;
+
+// --- Course websites, Gradescope and PrairieLearn ---
+
+export const providerKeys = {
+  website: (id: string) => ["source-connections", id, "website"] as const,
+  mappings: (id: string) => ["source-connections", id, "course-mappings"] as const,
+  assignments: (id: string, pending: boolean) => ["source-connections", id, "assignments", { pending }] as const,
+  facts: (taskId: number) => ["tasks", "provider-facts", taskId] as const,
+};
+
+/** A website's settings, credential status (never the password) and pending resources. */
+export function useWebsiteDetails(id: string | null) {
+  return useQuery({
+    queryKey: providerKeys.website(id ?? ""),
+    queryFn: () => request<WebsiteDetails>(`/api/sources/${id}/website`),
+    enabled: Boolean(id),
+  });
+}
+
+/** Test connection: verifies without saving anything. */
+export function useTestWebsite() {
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string | null; body: Record<string, unknown> }) =>
+      request<WebsiteVerification>(`/api/sources/website/test${id ? `?connection_id=${encodeURIComponent(id)}` : ""}`, { method: "POST", body }),
+  });
+}
+
+export function useSaveWebsite() {
+  return useSourceMutation(({ id, body }: { id: string | null; body: Record<string, unknown> }) =>
+    request<{ source: SourceConnection; verification: WebsiteVerification | null }>(id ? `/api/sources/website/${id}` : "/api/sources/website", {
+      method: id ? "PUT" : "POST",
+      body,
+    }),
+  );
+}
+
+/** Signs a website in again; on success the server retries its pending resources right away. */
+export function useWebsiteCredential() {
+  return useSourceMutation(({ id, username, password }: { id: string; username: string; password: string }) =>
+    request<{ source: SourceConnection; verification: WebsiteVerification | null; sync: { state: string; errors: { code?: string }[] } | null }>(
+      `/api/sources/${id}/website/credential`,
+      { method: "POST", body: { username, password } },
+    ),
+  );
+}
+
+export function useForgetWebsitePassword() {
+  return useSourceMutation((id: string) => request<void>(`/api/sources/${id}/website/credential`, { method: "DELETE" }));
+}
+
+export function useCreateProviderSource() {
+  return useSourceMutation((body: { type: ProviderType; base_url: string; course_id?: number | null }) =>
+    request<SourceConnection>("/api/sources", { method: "POST", body }),
+  );
+}
+
+export function useDeleteSource() {
+  return useSourceMutation((id: string) => request<void>(`/api/sources/${id}`, { method: "DELETE" }));
+}
+
+/** Discover courses: reads the provider's dashboard with the saved browser session. */
+export function useDiscoverCourses() {
+  return useMutation({ mutationFn: (id: string) => request<ProviderCourse[]>(`/api/sources/${id}/provider-courses`) });
+}
+
+export function useCourseMappings(id: string, enabled = true) {
+  return useQuery({
+    queryKey: providerKeys.mappings(id),
+    queryFn: () => request<{ note: string | null; mappings: ProviderCourseMapping[] }>(`/api/sources/${id}/course-mappings`),
+    enabled,
+  });
+}
+
+export function useMapCourse() {
+  return useSourceMutation(({ id, ...body }: { id: string; provider_course_id: string; course_id: number; course_code?: string; name?: string }) =>
+    request<{ provider_course_id: string; course_id: number }>(`/api/sources/${id}/course-mappings`, { method: "POST", body }),
+  );
+}
+
+export function useUnmapCourse() {
+  return useSourceMutation(({ id, providerCourseId }: { id: string; providerCourseId: string }) =>
+    request<void>(`/api/sources/${id}/course-mappings/${encodeURIComponent(providerCourseId)}`, { method: "DELETE" }),
+  );
+}
+
+/** Gradescope assignments waiting for the student to say which task they are. */
+export function useProviderAssignments(id: string, pending: boolean, enabled = true) {
+  return useQuery({
+    queryKey: providerKeys.assignments(id, pending),
+    queryFn: () => request<ProviderAssignmentRow[]>(`/api/sources/${id}/assignments${pending ? "?pending=1" : ""}`),
+    enabled,
+  });
+}
+
+/** Confirms a task mapping; `task_id: null` keeps the assignment as its own task. */
+export function useMapTask() {
+  return useSourceMutation(({ id, ...body }: { id: string; provider_course_id: string; assignment_id: string; task_id: number | null }) =>
+    request<{ confirmed: boolean }>(`/api/sources/${id}/task-mappings`, { method: "POST", body }),
+  );
+}
+
+/** "Source facts" of one task: what Canvas and Gradescope each say. */
+export function useTaskProviderFacts(taskId: number, enabled = true) {
+  return useQuery({
+    queryKey: providerKeys.facts(taskId),
+    queryFn: () => request<TaskProviderFacts>(`/api/tasks/${taskId}/provider-facts`),
+    enabled,
+    staleTime: 60_000,
+  });
+}

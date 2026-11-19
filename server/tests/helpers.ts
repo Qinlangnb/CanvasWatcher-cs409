@@ -35,6 +35,7 @@ export const app = createApp({ config, db, logger, services });
 export async function resetDatabase(): Promise<void> {
   await services.sync.whenIdle();
   await services.aiJobs.whenIdle();
+  await services.sourceSyncs.whenIdle();
   await db.$executeRaw`TRUNCATE users, sessions, login_attempts CASCADE`;
 }
 

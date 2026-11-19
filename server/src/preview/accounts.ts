@@ -214,8 +214,9 @@ async function copyAccount(tx: Prisma.TransactionClient, template: User, userId:
 
   const courses = await tx.course.findMany({ where: { userId: from }, orderBy: { id: "asc" } });
   const courseIds = new Map<number, number>();
-  for (const { id, userId: _owner, createdAt: _created, updatedAt: _updated, ...rest } of courses) {
+  for (const { id, userId: _owner, createdAt: _created, updatedAt: _updated, ownerSourceId: _source, ...rest } of courses) {
     const copy = await tx.course.create({
+      // Sources are not copied: a copied website course stands alone.
       data: { ...rest, userId, name: scrub.text(rest.name), courseCode: scrub.text(rest.courseCode), htmlUrl: scrub.text(rest.htmlUrl) },
     });
     courseIds.set(id, copy.id);
@@ -228,7 +229,7 @@ async function copyAccount(tx: Prisma.TransactionClient, template: User, userId:
 
   const tasks = await tx.task.findMany({ where: { userId: from }, orderBy: { id: "asc" } });
   await tx.task.createMany({
-    data: tasks.map(({ id: _id, userId: _owner, updatedAt: _updated, ...task }) => ({
+    data: tasks.map(({ id: _id, userId: _owner, updatedAt: _updated, sourceId: _source, ...task }) => ({
       ...task,
       userId,
       courseId: course(task.courseId),
@@ -257,7 +258,8 @@ async function copyAccount(tx: Prisma.TransactionClient, template: User, userId:
 
   const files = await tx.courseFile.findMany({ where: { userId: from }, orderBy: { id: "asc" } });
   await tx.courseFile.createMany({
-    data: files.map(({ id: _id, userId: _owner, createdAt: _created, updatedAt: _updated, ...file }) => ({
+    // Website file bytes stay with their owner; previews can't download anyway.
+    data: files.map(({ id: _id, userId: _owner, createdAt: _created, updatedAt: _updated, sourceId: _source, blobId: _blob, ...file }) => ({
       ...file,
       userId,
       courseId: course(file.courseId),
@@ -285,7 +287,7 @@ async function copyAccount(tx: Prisma.TransactionClient, template: User, userId:
   // Source items are found again by their unique (course, kind, Canvas id), so changes can point at the copies.
   const items = await tx.sourceItem.findMany({ where: { userId: from }, orderBy: { id: "asc" } });
   const copies = await tx.sourceItem.createManyAndReturn({
-    data: items.map(({ id: _id, userId: _owner, ...item }) => {
+    data: items.map(({ id: _id, userId: _owner, sourceId: _source, ...item }) => {
       const content = scrub.json(item.content) as Content;
       return {
         ...item,

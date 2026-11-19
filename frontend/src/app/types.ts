@@ -61,8 +61,8 @@ export type TaskType = "assignment" | "homework" | "exam" | "project" | "reading
 export interface Task {
   id: number;
   course: CourseSummary;
-  /** Canvas tasks are synced; personal ones were added by the student. */
-  source: "canvas" | "personal";
+  /** Canvas, course-website and Gradescope tasks are synced; personal ones were added by the student. */
+  source: "canvas" | "personal" | "website" | "gradescope";
   title: string;
   type: TaskType | string;
   due_at: string | null;
@@ -142,6 +142,10 @@ export interface CourseFile {
   type: FileType;
   detected_type: string;
   user_override_type: FileType | null;
+  /** canvas, or website for a file a course-website sync downloaded and checked. */
+  source?: "canvas" | "website";
+  /** Website files: VALID, or INVALID_DOWNLOAD when the site sent something else (a sign-in page). */
+  integrity_status?: string | null;
 }
 
 export interface TaskAttachment {

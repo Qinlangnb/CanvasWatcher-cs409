@@ -56,6 +56,12 @@ function afterCursor(cursor: string): Prisma.CourseFileWhereInput {
   return { OR: [{ canvasUpdatedAt: { lt: at } }, { canvasUpdatedAt: at, id: { lt: id } }, { canvasUpdatedAt: null }] };
 }
 
+/** Only well-known document types are labelled as such; anything else is sent as opaque bytes. */
+function safeContentType(value: string | null): string {
+  const type = (value ?? "").split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  return /^(application\/(pdf|zip|msword|vnd\.[\w.+-]+|x-ipynb\+json)|text\/(plain|csv|markdown|x-python))$/.test(type) ? type : "application/octet-stream";
+}
+
 const fileNotFound = () => new HttpError(404, "FILE_NOT_FOUND", "That file could not be found.");
 
 export function filesRouter(db: Db, services: Services): Router {
@@ -110,6 +116,25 @@ export function filesRouter(db: Db, services: Services): Router {
     });
     if (!file) throw fileNotFound();
     if (isPreview(user)) throw previewUnavailable();
+    if (file.sourceId !== null) {
+      // A course-website file: its checked bytes are kept here, since no Canvas link exists.
+      if (asLink) {
+        res.json({ url: `/api/files/${file.id}/download`, filename: file.displayName });
+        return;
+      }
+      const blob = file.blobId === null || file.integrityStatus !== "VALID" ? null : await db.websiteBlob.findFirst({ where: { id: file.blobId, userId } });
+      if (!blob) throw new HttpError(404, "FILE_UNAVAILABLE", "This website file could not be downloaded. Sync the website and try again.");
+      res.set({
+        "Content-Type": safeContentType(file.contentType),
+        "Content-Length": String(blob.content.length),
+        "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(file.displayName)}`,
+        "X-Content-Type-Options": "nosniff",
+        // Never let a downloaded HTML or SVG run as part of this site.
+        "Content-Security-Policy": "sandbox; default-src 'none'",
+      });
+      res.end(Buffer.from(blob.content));
+      return;
+    }
     const connection = await db.canvasConnection.findUnique({ where: { userId } });
     if (!connection) throw notConnected();
 

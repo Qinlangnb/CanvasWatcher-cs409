@@ -52,11 +52,13 @@ const CONTEXT_FIELDS: Record<ItemKind, Record<string, string>> = {
   },
   ANNOUNCEMENT: { title: "title", message: "body", posted_at: "posted_at" },
   FILE: { name: "display_name" },
+  // Course website pages: the title and the page text.
+  PAGE: { title: "title", text: "body" },
 };
 
 const scalar = (value: unknown) => (value === null || value === undefined ? null : String(value).slice(0, 800));
 const bodyText = (content: Content | null | undefined) => {
-  const text = content?.description ?? content?.message;
+  const text = content?.description ?? content?.message ?? content?.text;
   return typeof text === "string" ? text.slice(0, 1800) : "";
 };
 

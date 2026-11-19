@@ -77,6 +77,15 @@ const environment = z.object({
   CANVAS_OAUTH_CLIENT_ID: z.string().trim().default(""),
   CANVAS_OAUTH_CLIENT_SECRET: z.string().trim().default(""),
   CANVAS_OAUTH_REDIRECT_URI: z.string().trim().default(""),
+  /**
+   * Course websites and Gradescope/PrairieLearn are fetched from addresses users type in. Off by default
+   * so those can't reach this server's own network (loopback, private ranges, cloud metadata).
+   */
+  SOURCES_ALLOW_PRIVATE_HOSTS: z.enum(["true", "false"]).default("false"),
+  /** Course-website file bytes kept per user, in MiB (stored in PostgreSQL). */
+  WEBSITE_STORAGE_QUOTA_MB: z.coerce.number().int().min(0).max(100_000).default(1024),
+  /** Largest single course-website file kept, in MiB. */
+  WEBSITE_MAX_FILE_MB: z.coerce.number().int().min(1).max(200).default(25),
 });
 
 export interface Config {
@@ -104,6 +113,11 @@ export interface Config {
   authBrokerUrl: string;
   /** Canvas OAuth2, or null when it is not set up (or set up wrongly). */
   canvasOAuth: CanvasOAuthConfig | null;
+  /** Website / provider fetches may reach private addresses. */
+  sourcesAllowPrivateHosts: boolean;
+  /** Bytes of course-website files kept per user, and the largest single file. */
+  websiteQuotaBytes: number;
+  websiteMaxFileBytes: number;
 }
 
 export interface CanvasOAuthConfig {
@@ -183,5 +197,8 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
             redirectUri: values.CANVAS_OAUTH_REDIRECT_URI,
           }
         : null,
+    sourcesAllowPrivateHosts: values.SOURCES_ALLOW_PRIVATE_HOSTS === "true",
+    websiteQuotaBytes: values.WEBSITE_STORAGE_QUOTA_MB * 1024 * 1024,
+    websiteMaxFileBytes: values.WEBSITE_MAX_FILE_MB * 1024 * 1024,
   };
 }

@@ -13,7 +13,7 @@ const logger = pino({ level: config.logLevel });
 const db = createDb(config.databaseUrl);
 const services = createServices({ config, db, logger });
 await services.sync.recoverInterrupted();
-const stopScheduler = startScheduler(services.sync, config.syncIntervalMinutes, logger);
+const stopScheduler = startScheduler(services.sync, config.syncIntervalMinutes, logger, services.sourceSyncs);
 const stopPreviewCleanup = startPreviewCleanup(db, logger);
 const stopReviews = startReviewWorker(services.reviews, logger);
 const server = createApp({ config, db, logger, services }).listen(config.port, () => {
@@ -27,8 +27,7 @@ function shutdown(signal: string) {
   stopReviews();
   server.close(() => {
     // Let running syncs record their result; the forced exit below caps the wait.
-    void services.sync
-      .whenIdle()
+    void Promise.all([services.sync.whenIdle(), services.sourceSyncs.whenIdle()])
       .then(() => db.$disconnect())
       .finally(() => process.exit(0));
   });

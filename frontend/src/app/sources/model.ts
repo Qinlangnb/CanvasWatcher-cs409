@@ -236,7 +236,232 @@ export function syncFeedback(result: { state?: string; errors?: { code?: string 
     PROVIDER_COURSE_MAPPING_REQUIRED: "Link the discovered courses before syncing.",
     PROVIDER_TASK_MAPPING_REQUIRED: "Confirm which assignments match your tasks before syncing.",
     PRAIRIELEARN_PARSER_NOT_VERIFIED: "PrairieLearn course pages cannot be read yet.",
+    PRAIRIELEARN_COURSE_PARSER_NOT_VERIFIED: "PrairieLearn course pages cannot be read yet.",
+    STORAGE_QUOTA_EXCEEDED: "Some website files were not kept: your file storage is full.",
+    DISCOVERY_LIMIT_REACHED: "The website has more pages than its discovery limit; raise the limit in the website's settings.",
     PERMISSION_DENIED: "The source refused access to some pages.",
   };
   return { ok: false, message: messages[code.toUpperCase()] ?? "Some items could not be synced. Existing data was kept." };
+}
+
+// --- Course websites ---
+
+export type WebsiteAuth = "none" | "ntlm";
+
+export interface WebsiteConfig {
+  authentication_method: WebsiteAuth;
+  protected_path_prefix: string | null;
+  probe_url: string | null;
+  discovery_path_limit: number;
+  week_1_monday: string | null;
+}
+
+export interface PendingResource {
+  id: number;
+  url: string;
+  title: string;
+  item_type: string;
+  state: "AUTH_REQUIRED" | "DISCOVERED" | "FAILED";
+  last_error_code: string | null;
+  last_attempt_at: string;
+}
+
+/** GET /api/sources/:id/website. Never carries the password. */
+export interface WebsiteDetails {
+  config: WebsiteConfig;
+  course: { id: number; code: string; name: string; term: string | null; owned: boolean } | null;
+  credential: { username: string; state: string; present: boolean; last_error_code: string | null; verified_at: string | null } | null;
+  pending: PendingResource[];
+}
+
+export interface WebsiteVerification {
+  verified: boolean;
+  message: string;
+  public_only: boolean;
+}
+
+/** What the website form edits; strings so inputs stay controlled. */
+export interface WebsiteDraft {
+  name: string;
+  course_code: string;
+  course_name: string;
+  term: string;
+  base_url: string;
+  authentication_method: WebsiteAuth;
+  protected_path_prefix: string;
+  probe_url: string;
+  discovery_path_limit: string;
+  week_1_monday: string;
+}
+
+export const DEFAULT_DISCOVERY_LIMIT = 100;
+
+export function websiteDraft(source: SourceConnection | null, details: WebsiteDetails | null | undefined, defaultTerm: string): WebsiteDraft {
+  const config = details?.config;
+  return {
+    name: source?.name ?? "",
+    course_code: details?.course?.code ?? "",
+    course_name: details?.course?.name ?? "",
+    term: source ? (details?.course?.term ?? "") : defaultTerm,
+    base_url: source?.base_url ?? "",
+    authentication_method: config?.authentication_method ?? (source?.config_json.authentication_method === "ntlm" ? "ntlm" : "none"),
+    protected_path_prefix: config?.protected_path_prefix ?? "",
+    probe_url: config?.probe_url ?? "",
+    discovery_path_limit: String(config?.discovery_path_limit ?? DEFAULT_DISCOVERY_LIMIT),
+    week_1_monday: config?.week_1_monday ?? "",
+  };
+}
+
+const NETWORK_FIELDS = ["base_url", "authentication_method", "protected_path_prefix", "probe_url"] as const;
+
+/** A changed address or access setting is probed again before it replaces the working one. */
+export function websiteNetworkChanged(initial: WebsiteDraft, draft: WebsiteDraft): boolean {
+  return NETWORK_FIELDS.some((key) => initial[key].trim() !== draft[key].trim());
+}
+
+/**
+ * The body for POST/PUT /api/sources/website (and its test). The login goes along only when it is
+ * needed: a test, a new source, changed access, a typed password or another user name. A label-only
+ * edit sends none, so it needs no password.
+ */
+export function websitePayload(
+  draft: WebsiteDraft,
+  initial: WebsiteDraft,
+  login: { username: string; password: string; storedUsername: string | null },
+  options: { editing: boolean; testOnly: boolean },
+): Record<string, unknown> {
+  const ntlm = draft.authentication_method === "ntlm";
+  const includeLogin =
+    ntlm &&
+    (options.testOnly ||
+      !options.editing ||
+      websiteNetworkChanged(initial, draft) ||
+      login.password !== "" ||
+      login.username.trim() !== (login.storedUsername ?? ""));
+  const limit = Number(draft.discovery_path_limit);
+  return {
+    name: draft.name.trim() || `${draft.course_code.trim() || "Course"} Site`,
+    course_code: draft.course_code.trim(),
+    course_name: draft.course_name.trim(),
+    // An untouched term on edit is left alone.
+    term: options.editing && draft.term === initial.term ? undefined : draft.term.trim() || null,
+    base_url: draft.base_url.trim(),
+    authentication_method: draft.authentication_method,
+    protected_path_prefix: ntlm ? draft.protected_path_prefix.trim() || null : null,
+    probe_url: ntlm ? draft.probe_url.trim() || null : null,
+    discovery_path_limit: Number.isInteger(limit) && limit >= 1 ? limit : DEFAULT_DISCOVERY_LIMIT,
+    week_1_monday: draft.week_1_monday || null,
+    ...(includeLogin ? { ntlm: { username: login.username.trim(), password: login.password } } : {}),
+  };
+}
+
+/** The website card's status line, in the original's words. */
+export function websiteCredentialLine(details: WebsiteDetails | null | undefined): string {
+  if (!details) return "Website authentication: checking…";
+  if (details.config.authentication_method !== "ntlm") return "Public website · no password needed.";
+  const credential = details.credential;
+  if (credential?.present && credential.state === "VALID") return "Website authentication: Verified.";
+  if (credential?.last_error_code === "protected_access_not_verified") return "Public website reachable. Protected access not yet verified.";
+  if (credential?.last_error_code === "auth_failed") return "Website authentication: the website rejected the password. Enter it again.";
+  if (!credential?.present) return "Website authentication: Authentication required.";
+  return `Website authentication: ${credential.state.replaceAll("_", " ").toLowerCase()}.`;
+}
+
+/** " · 3 protected resources pending" after the card's course line. */
+export function pendingNote(pending: readonly PendingResource[] | undefined): string {
+  const count = pending?.length ?? 0;
+  if (count === 0) return "";
+  const waiting = pending?.filter((row) => row.state === "AUTH_REQUIRED").length ?? 0;
+  if (waiting === count) return ` · ${count} protected resource${count === 1 ? "" : "s"} pending`;
+  return ` · ${count} resource${count === 1 ? "" : "s"} pending`;
+}
+
+// --- Gradescope / PrairieLearn ---
+
+export type ProviderType = "gradescope" | "prairielearn";
+
+export const PROVIDER_DEFAULT_URLS: Record<ProviderType, string> = {
+  gradescope: "https://www.gradescope.com",
+  prairielearn: "https://us.prairielearn.com/pl",
+};
+
+/** The original's wording while PrairieLearn's course pages are not read. */
+export const PRAIRIELEARN_NOTE = "Student course parsing awaits representative course data; authentication can be tested independently.";
+
+export interface ProviderCourse {
+  external_id: string;
+  course_code: string;
+  name: string;
+  term: string | null;
+  url: string;
+  mapped_course_id: number | null;
+}
+
+export interface ProviderCourseMapping {
+  provider_course_id: string;
+  course_id: number;
+  course_code: string;
+  name: string;
+}
+
+export interface ProviderAssignmentRow {
+  id: number;
+  provider_course_id: string;
+  assignment_id: string;
+  title: string;
+  url: string;
+  due_at: string | null;
+  course_id: number;
+  task_id: number | null;
+  binding: string | null;
+  confirmed: boolean;
+  candidates: { id: number; title: string; due_at: string | null }[];
+}
+
+export interface ProviderFactRow {
+  provider: string;
+  due_at: string | null;
+  late_due_at: string | null;
+  submission_state: string | null;
+  submitted_at: string | null;
+  score: number | null;
+  max_score: number | null;
+  grade: string | null;
+  direct_assignment_url: string | null;
+  source_item_id: number;
+  source_url: string | null;
+  is_deleted: boolean;
+}
+
+export interface TaskProviderFacts {
+  local_completed: boolean;
+  effective_submission_state: "graded" | "submitted" | null;
+  effective_due_at: string | null;
+  deadlines_differ: boolean;
+  provider_facts: ProviderFactRow[];
+}
+
+export const PROVIDER_LABELS: Record<string, string> = { canvas: "Canvas", gradescope: "Gradescope", prairielearn: "PrairieLearn" };
+
+/** True when the sources disagree on the deadline (to the minute). */
+export function deadlinesDiffer(facts: readonly Pick<ProviderFactRow, "due_at">[]): boolean {
+  const dues = new Set(facts.filter((row) => row.due_at).map((row) => Math.round(Date.parse(row.due_at as string) / 60_000)));
+  return dues.size > 1;
+}
+
+/** "Source facts", with the original's "· deadlines differ". */
+export function sourceFactsTitle(facts: TaskProviderFacts): string {
+  return facts.deadlines_differ || deadlinesDiffer(facts.provider_facts) ? "Source facts · deadlines differ" : "Source facts";
+}
+
+/** Only worth showing when another source than Canvas reports on the task. */
+export function hasProviderFacts(facts: TaskProviderFacts | null | undefined): boolean {
+  return Boolean(facts?.provider_facts.some((row) => row.provider !== "canvas"));
+}
+
+export function submissionLabel(state: string | null | undefined): string {
+  if (state === "graded") return "Graded";
+  if (state === "submitted" || state === "pending_review") return "Submitted";
+  if (state === "unsubmitted" || state === "unknown" || !state) return "Not submitted";
+  return state.replaceAll("_", " ").replace(/^./, (c) => c.toUpperCase());
 }

@@ -156,6 +156,10 @@ export function tasksRouter(db: Db): Router {
     if (task.source === "CANVAS" && CANVAS_FIELDS.some((field) => body[field] !== undefined)) {
       throw new HttpError(409, "TASK_FROM_CANVAS", "This task comes from Canvas. Change its title and due date in Canvas.");
     }
+    // Course-website and Gradescope tasks are rewritten by their next sync, like Canvas ones.
+    if (task.source !== "PERSONAL" && task.source !== "CANVAS" && CANVAS_FIELDS.some((field) => body[field] !== undefined)) {
+      throw new HttpError(409, "TASK_FROM_SOURCE", "This task comes from a synced source; its title and due date follow that source.");
+    }
     const now = new Date();
     // Done, ignored and progress are the task's state: they bump its revision, and a stale revision is refused.
     const stateChange = body.done !== undefined || body.ignored !== undefined || body.progress !== undefined;
@@ -213,6 +217,7 @@ export function tasksRouter(db: Db): Router {
     if (task.source === "CANVAS") {
       throw new HttpError(409, "TASK_FROM_CANVAS", "Tasks from Canvas can't be deleted. Ignore it instead.");
     }
+    if (task.source !== "PERSONAL") throw new HttpError(409, "TASK_FROM_SOURCE", "Synced tasks can't be deleted. Ignore it instead.");
     await db.task.delete({ where: { id: task.id } });
     res.status(204).end();
   });

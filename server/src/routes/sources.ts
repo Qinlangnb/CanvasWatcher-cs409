@@ -11,7 +11,7 @@ import { FieldError, HttpError } from "../http/errors.js";
 import { isPreview, previewUnavailable } from "../preview/accounts.js";
 import type { Services } from "../services.js";
 import { sourceAdapter } from "../sources/registry.js";
-import { HEALTH_SUMMARIES } from "../sync/service.js";
+import { BLOB_GRACE_MS, pruneWebsiteBlobs } from "../sources/website/service.js";
 import { disconnectCanvas } from "./canvas.js";
 import { presentRun } from "./present.js";
 import { startCanvasSync } from "./sync.js";
@@ -226,6 +226,10 @@ export function sourcesRouter(db: Db, config: Config, services: Services): Route
       if ((body.base_url !== undefined || body.config !== undefined) && !adapter) {
         throw new HttpError(501, "SOURCE_TYPE_UNAVAILABLE", "This kind of source is coming in this release.");
       }
+      // A website's address and access settings change only through its own editor, which verifies them.
+      if (source.type === "WEBSITE" && (body.base_url !== undefined || body.config !== undefined)) {
+        throw new HttpError(409, "WEBSITE_EDITOR_REQUIRED", "Change a course website's address and access in its editor.");
+      }
       if (adapter && body.base_url !== undefined) {
         const baseUrl = adapter.normalizeBaseUrl(body.base_url);
         if (baseUrl !== source.baseUrl) {
@@ -246,7 +250,11 @@ export function sourcesRouter(db: Db, config: Config, services: Services): Route
     const userId = ownerOnly(res.locals);
     const source = await load(userId, req.params.id);
     if (source.type === "CANVAS") await disconnectCanvas(db, userId);
-    else await db.sourceConnection.delete({ where: { id: source.id } });
+    else {
+      await db.sourceConnection.delete({ where: { id: source.id } });
+      // The website's files went with it; their stored bytes stop counting against the quota.
+      if (source.type === "WEBSITE") await pruneWebsiteBlobs(db, userId, new Date(Date.now() - BLOB_GRACE_MS));
+    }
     res.status(204).end();
   });
 
@@ -260,25 +268,8 @@ export function sourcesRouter(db: Db, config: Config, services: Services): Route
       return;
     }
     if (!source.enabled) throw new HttpError(409, "SOURCE_DISABLED", "This source is turned off. Turn it on to sync.");
-    const adapter = sourceAdapter(source.type);
-    if (!adapter?.sync) throw new HttpError(501, "SOURCE_TYPE_UNAVAILABLE", "Syncing this kind of source is coming in this release.");
-    const result = await adapter.sync(source, { db, services, userId });
-    const failed = result.errors.length > 0;
-    const health = result.state === "AUTH_REQUIRED" ? "AUTH_REQUIRED" : failed ? (result.items_seen > 0 ? "DEGRADED" : "ERROR") : "HEALTHY";
-    const now = new Date();
-    await db.sourceConnection.update({
-      where: { id: source.id },
-      data: {
-        state: result.state,
-        lastSyncAt: now,
-        ...(health === "HEALTHY" || health === "DEGRADED" ? { lastSuccessAt: now } : {}),
-        lastError: failed ? `${result.errors.length} resource(s) could not be read.` : null,
-        health,
-        healthSummary: HEALTH_SUMMARIES[health],
-        diagnostics: result.errors.map((row) => ({ ...row, course: null, optional: false })) as Prisma.InputJsonValue,
-      },
-    });
-    res.json(result);
+    // Health and diagnostics are recorded the same way for "Sync now" and the scheduler (sources/run.ts).
+    res.json(await services.sourceSyncs.run(source));
   });
 
   return router;

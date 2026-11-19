@@ -61,6 +61,8 @@ model User {
   providerSessions      ProviderSession[]
   authChallenges        AuthChallenge[]
   oauthStates           CanvasOAuthState[]
+  // Course websites and read-only providers (sources/website, sources/provider).
+  websiteBlobs          WebsiteBlob[]
 
   @@index([previewExpiresAt])
   @@map("users")
@@ -165,31 +167,40 @@ model SyncRun {
 }
 
 model Course {
-  id             Int                @id @default(autoincrement())
-  userId         String             @map("user_id") @db.Uuid
-  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  canvasId       String             @map("canvas_id")
-  courseCode     String             @map("course_code")
+  id             Int                  @id @default(autoincrement())
+  userId         String               @map("user_id") @db.Uuid
+  user           User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// The Canvas course id; `website:<source id>` for a course a website source created.
+  canvasId       String               @map("canvas_id")
+  /// CANVAS, or WEBSITE for a course that exists only because a course website was added.
+  source         SourceType           @default(CANVAS)
+  /// The website source that created this course; removing that source removes the course.
+  ownerSourceId  String?              @map("owner_source_id") @db.Uuid
+  ownerSource    SourceConnection?    @relation("OwnedCourses", fields: [ownerSourceId], references: [id], onDelete: Cascade)
+  courseCode     String               @map("course_code")
   name           String
-  termName       String?            @map("term_name")
-  termStartAt    DateTime?          @map("term_start_at") @db.Timestamptz(3)
-  termEndAt      DateTime?          @map("term_end_at") @db.Timestamptz(3)
-  htmlUrl        String             @map("html_url")
+  termName       String?              @map("term_name")
+  termStartAt    DateTime?            @map("term_start_at") @db.Timestamptz(3)
+  termEndAt      DateTime?            @map("term_end_at") @db.Timestamptz(3)
+  htmlUrl        String               @map("html_url")
   /// Set when the user hides the course; sync keeps updating it.
-  archivedAt     DateTime?          @map("archived_at") @db.Timestamptz(3)
+  archivedAt     DateTime?            @map("archived_at") @db.Timestamptz(3)
   /// The last sync that saw this course among the user's active enrollments.
-  lastSeenAt     DateTime           @map("last_seen_at") @db.Timestamptz(3)
-  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  lastSeenAt     DateTime             @map("last_seen_at") @db.Timestamptz(3)
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
   tasks          Task[]
   files          CourseFile[]
   sourceItems    SourceItem[]
   changes        ChangeEvent[]
   syllabus       CourseSyllabus?
-  sources        SourceConnection[]
+  sources        SourceConnection[]   @relation("SourceCourse")
   policy         CoursePolicy?
+  websitePages   WebsitePage[]
+  providerMaps   ProviderCourseMap[]
+  providerItems  ProviderAssignment[]
   /// Travel time before and after this course's class events; it is busy, not study time.
-  commuteMinutes Int                @default(0) @map("commute_minutes")
+  commuteMinutes Int                  @default(0) @map("commute_minutes")
   events         CalendarEvent[]
 
   @@unique([userId, canvasId])
@@ -202,66 +213,76 @@ enum TaskSource {
   CANVAS
   /// Added by the student; sync never touches it.
   PERSONAL
+  /// A date-only homework deadline read from a course website's schedule table.
+  WEBSITE
+  /// A Gradescope assignment with no matching task.
+  GRADESCOPE
 
   @@map("task_source")
 }
 
 /// A Canvas assignment or a task the student added, plus the student's own progress on it.
 model Task {
-  id                   Int             @id @default(autoincrement())
-  userId               String          @map("user_id") @db.Uuid
-  user                 User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  courseId             Int             @map("course_id")
-  course               Course          @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  source               TaskSource      @default(CANVAS)
+  id                   Int                  @id @default(autoincrement())
+  userId               String               @map("user_id") @db.Uuid
+  user                 User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId             Int                  @map("course_id")
+  course               Course               @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  source               TaskSource           @default(CANVAS)
   /// Null for personal tasks.
-  canvasId             String?         @map("canvas_id")
+  canvasId             String?              @map("canvas_id")
   title                String
   /// assignment, homework, exam, project or reading, guessed from the title and group.
-  taskType             String          @map("task_type")
-  dueAt                DateTime?       @map("due_at") @db.Timestamptz(3)
-  pointsPossible       Float?          @map("points_possible")
-  htmlUrl              String?         @map("html_url")
+  taskType             String               @map("task_type")
+  dueAt                DateTime?            @map("due_at") @db.Timestamptz(3)
+  pointsPossible       Float?               @map("points_possible")
+  htmlUrl              String?              @map("html_url")
   /// Canvas workflow_state of the submission: unsubmitted, submitted, graded or pending_review.
-  submissionState      String?         @map("submission_state")
-  submittedAt          DateTime?       @map("submitted_at") @db.Timestamptz(3)
-  completedAt          DateTime?       @map("completed_at") @db.Timestamptz(3)
-  ignoredAt            DateTime?       @map("ignored_at") @db.Timestamptz(3)
+  submissionState      String?              @map("submission_state")
+  submittedAt          DateTime?            @map("submitted_at") @db.Timestamptz(3)
+  completedAt          DateTime?            @map("completed_at") @db.Timestamptz(3)
+  ignoredAt            DateTime?            @map("ignored_at") @db.Timestamptz(3)
   /// Set when the assignment disappears from Canvas.
-  removedAt            DateTime?       @map("removed_at") @db.Timestamptz(3)
+  removedAt            DateTime?            @map("removed_at") @db.Timestamptz(3)
   /// Percent done, 0-100, as the student reports it.
-  progress             Int             @default(0)
+  progress             Int                  @default(0)
   /// The student's estimate of the total work; null means "use the default for the task type".
-  estimatedMinutes     Int?            @map("estimated_minutes")
+  estimatedMinutes     Int?                 @map("estimated_minutes")
   /// Minutes the student says they have spent on it so far. With progress, it gives a better
   /// estimate of what is left than the type's default.
-  spentMinutes         Int             @default(0) @map("spent_minutes")
+  spentMinutes         Int                  @default(0) @map("spent_minutes")
   /// The student's Canvas score and grade once Canvas shows them; null until graded or while hidden.
   score                Float?
   grade                String?
-  excused              Boolean         @default(false)
+  excused              Boolean              @default(false)
   /// Local date (YYYY-MM-DD) the student started this task before the plan reached it. That day's plan
   /// includes it; on later days the planner decides on its own again.
-  startedOn            String?         @map("started_on") @db.VarChar(10)
+  startedOn            String?              @map("started_on") @db.VarChar(10)
   notes                String?
-  createdAt            DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  createdAt            DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
   // --- Tasks parity: timers, revisions, date-only deadlines (see tasks/work.ts, tasks/progress.ts) ---
   /// Bumped by every progress, completion or ignore change; writers compare-and-swap on it, so a
   /// stale tab can't overwrite newer work.
-  stateRevision        Int             @default(0) @map("state_revision")
+  stateRevision        Int                  @default(0) @map("state_revision")
   /// Seconds of finished work-timer sessions. Time used is this plus spentMinutes, which is the
   /// student's manual correction (it may be negative).
-  trackedSeconds       Int             @default(0) @map("tracked_seconds")
+  trackedSeconds       Int                  @default(0) @map("tracked_seconds")
   /// Newest client time a timer heartbeat reported; older heartbeats are ignored.
-  lastClientReportedAt DateTime?       @map("last_client_reported_at") @db.Timestamptz(3)
+  lastClientReportedAt DateTime?            @map("last_client_reported_at") @db.Timestamptz(3)
   /// The deadline is a day without a time (personal tasks); dueAt is 23:59 local time that day.
-  dueDateOnly          Boolean         @default(false) @map("due_date_only")
+  dueDateOnly          Boolean              @default(false) @map("due_date_only")
   workSessions         WorkSession[]
   progressHistory      TaskProgress[]
   fileLinks            TaskFileLink[]
   aiSummary            TaskAiSummary?
   aiEstimate           TaskAiEstimate?
+  /// The Gradescope (or other LTI tool) link of a Canvas assignment; it binds the task to that tool's assignment.
+  externalToolUrl      String?              @map("external_tool_url")
+  /// The website or Gradescope source that created this task (source WEBSITE or GRADESCOPE).
+  sourceId             String?              @map("source_id") @db.Uuid
+  sourceConnection     SourceConnection?    @relation("SourceTasks", fields: [sourceId], references: [id], onDelete: Cascade)
+  providerItems        ProviderAssignment[]
 
   @@unique([courseId, canvasId])
   @@index([userId, dueAt])
@@ -270,23 +291,34 @@ model Task {
 
 /// Metadata of a Canvas course file. Contents are fetched from Canvas when downloaded.
 model CourseFile {
-  id               Int       @id @default(autoincrement())
-  userId           String    @map("user_id") @db.Uuid
-  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  courseId         Int       @map("course_id")
-  course           Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  canvasId         String    @map("canvas_id")
-  displayName      String    @map("display_name")
-  contentType      String?   @map("content_type")
-  sizeBytes        Int       @map("size_bytes")
-  canvasUpdatedAt  DateTime? @map("canvas_updated_at") @db.Timestamptz(3)
+  id               Int               @id @default(autoincrement())
+  userId           String            @map("user_id") @db.Uuid
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId         Int               @map("course_id")
+  course           Course            @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  canvasId         String            @map("canvas_id")
+  displayName      String            @map("display_name")
+  contentType      String?           @map("content_type")
+  sizeBytes        Int               @map("size_bytes")
+  canvasUpdatedAt  DateTime?         @map("canvas_updated_at") @db.Timestamptz(3)
   /// lecture, homework, discussion, reading, exam, solution or other; set by sync (see files/types.ts).
-  detectedType     String    @default("other") @map("detected_type")
+  detectedType     String            @default("other") @map("detected_type")
   /// The student's own choice, which wins over detectedType and survives syncs.
-  userOverrideType String?   @map("user_override_type")
-  removedAt        DateTime? @map("removed_at") @db.Timestamptz(3)
-  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt        DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  userOverrideType String?           @map("user_override_type")
+  removedAt        DateTime?         @map("removed_at") @db.Timestamptz(3)
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+  // --- Course website files: the bytes are kept here, since there is no Canvas to fetch them from ---
+  /// The website source the file came from; null for Canvas files.
+  sourceId         String?           @map("source_id") @db.Uuid
+  sourceConnection SourceConnection? @relation("SourceFiles", fields: [sourceId], references: [id], onDelete: Cascade)
+  sourceUrl        String?           @map("source_url")
+  sha256           String?           @db.VarChar(64)
+  /// VALID or INVALID_DOWNLOAD (for example a login page served for a PDF link).
+  integrityStatus  String?           @map("integrity_status")
+  validationError  String?           @map("validation_error")
+  blobId           Int?              @map("blob_id")
+  blob             WebsiteBlob?      @relation(fields: [blobId], references: [id], onDelete: SetNull)
 
   @@unique([courseId, canvasId])
   @@index([userId, courseId])
@@ -297,28 +329,33 @@ enum ItemKind {
   ASSIGNMENT
   FILE
   ANNOUNCEMENT
+  /// A course website page.
+  PAGE
 
   @@map("item_kind")
 }
 
 /// The last-seen version of every tracked Canvas item, used to detect changes.
 model SourceItem {
-  id          Int           @id @default(autoincrement())
-  userId      String        @map("user_id") @db.Uuid
-  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  courseId    Int           @map("course_id")
-  course      Course        @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  kind        ItemKind
-  canvasId    String        @map("canvas_id")
-  title       String
-  htmlUrl     String?       @map("html_url")
+  id               Int               @id @default(autoincrement())
+  userId           String            @map("user_id") @db.Uuid
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseId         Int               @map("course_id")
+  course           Course            @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  kind             ItemKind
+  canvasId         String            @map("canvas_id")
+  title            String
+  htmlUrl          String?           @map("html_url")
   /// SHA-256 of `content`; unchanged items are skipped without comparing fields.
-  contentHash String        @map("content_hash")
+  contentHash      String            @map("content_hash")
   /// The fields compared between syncs, for example title, due date and description.
-  content     Json
-  firstSeenAt DateTime      @default(now()) @map("first_seen_at") @db.Timestamptz(3)
-  removedAt   DateTime?     @map("removed_at") @db.Timestamptz(3)
-  changes     ChangeEvent[]
+  content          Json
+  firstSeenAt      DateTime          @default(now()) @map("first_seen_at") @db.Timestamptz(3)
+  removedAt        DateTime?         @map("removed_at") @db.Timestamptz(3)
+  changes          ChangeEvent[]
+  /// The website or Gradescope source of the item; null for Canvas items.
+  sourceId         String?           @map("source_id") @db.Uuid
+  sourceConnection SourceConnection? @relation("SourceItems", fields: [sourceId], references: [id], onDelete: Cascade)
 
   @@unique([courseId, kind, canvasId])
   @@map("source_items")
@@ -484,32 +521,41 @@ enum SourceHealth {
 /// Where a user's academic data comes from: their Canvas account, a course website, Gradescope or
 /// PrairieLearn. One row per (user, type, base URL); only one Canvas row per user.
 model SourceConnection {
-  id              String           @id @default(uuid()) @db.Uuid
-  userId          String           @map("user_id") @db.Uuid
-  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type            SourceType
-  name            String
+  id                String               @id @default(uuid()) @db.Uuid
+  userId            String               @map("user_id") @db.Uuid
+  user              User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type              SourceType
+  name              String
   /// Normalized http(s) URL without query or fragment; an origin for Canvas.
-  baseUrl         String           @map("base_url")
+  baseUrl           String               @map("base_url")
   /// The course this source belongs to (course websites); null for account-level sources.
-  courseId        Int?             @map("course_id")
-  course          Course?          @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  courseId          Int?                 @map("course_id")
+  course            Course?              @relation("SourceCourse", fields: [courseId], references: [id], onDelete: SetNull)
   /// Type-specific, secret-free settings (for example a website's authentication method).
-  config          Json             @default("{}")
+  config            Json                 @default("{}")
   /// READY, AUTH_REQUIRED, DISABLED, ERROR or PENDING; plain text so new source types can add states.
-  state           String           @default("READY")
+  state             String               @default("READY")
   /// Disabled sources are skipped by sync and keep their data.
-  enabled         Boolean          @default(true)
-  lastSyncAt      DateTime?        @map("last_sync_at") @db.Timestamptz(3)
-  lastSuccessAt   DateTime?        @map("last_success_at") @db.Timestamptz(3)
-  lastError       String?          @map("last_error")
-  health          SourceHealth     @default(UNKNOWN)
-  healthSummary   String?          @map("health_summary")
+  enabled           Boolean              @default(true)
+  lastSyncAt        DateTime?            @map("last_sync_at") @db.Timestamptz(3)
+  lastSuccessAt     DateTime?            @map("last_success_at") @db.Timestamptz(3)
+  lastError         String?              @map("last_error")
+  health            SourceHealth         @default(UNKNOWN)
+  healthSummary     String?              @map("health_summary")
   /// Resources the last sync could not read: [{ resource, course, code, http_status, optional }].
-  diagnostics     Json             @default("[]")
-  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
-  providerSession ProviderSession?
+  diagnostics       Json                 @default("[]")
+  createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+  providerSession   ProviderSession?
+  ownedCourses      Course[]             @relation("OwnedCourses")
+  tasks             Task[]               @relation("SourceTasks")
+  files             CourseFile[]         @relation("SourceFiles")
+  items             SourceItem[]         @relation("SourceItems")
+  websiteCredential WebsiteCredential?
+  websitePages      WebsitePage[]
+  pending           PendingResource[]
+  providerMaps      ProviderCourseMap[]
+  providerItems     ProviderAssignment[]
 
   @@unique([userId, type, baseUrl])
   @@index([userId])
@@ -955,4 +1001,130 @@ model TaskAiEstimate {
 
   @@index([userId])
   @@map("task_ai_estimates")
+}
+
+// --- Course websites and read-only providers (sources/website, sources/provider) ---
+
+/// The NTLM username and sealed password of a course website. The password is sealed with AAD
+/// "<user_id>:website-ntlm:<connection_id>", so it cannot be moved to another user or source.
+model WebsiteCredential {
+  connectionId       String           @id @map("connection_id") @db.Uuid
+  connection         SourceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  userId             String           @map("user_id") @db.Uuid
+  username           String
+  passwordCiphertext String?          @map("password_ciphertext")
+  /// Bumped by every replacement; a replacement compares and swaps on it.
+  generation         Int              @default(0)
+  state              CredentialState  @default(MISSING)
+  verifiedAt         DateTime?        @map("verified_at") @db.Timestamptz(3)
+  failedAt           DateTime?        @map("failed_at") @db.Timestamptz(3)
+  /// protected_access_not_verified, auth_failed, credential_not_loaded...
+  lastErrorCode      String?          @map("last_error_code")
+  updatedAt          DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([userId])
+  @@map("website_credentials")
+}
+
+/// The readable content of a course website page, for the syllabus finder and AI Chat.
+model WebsitePage {
+  id        Int              @id @default(autoincrement())
+  userId    String           @map("user_id") @db.Uuid
+  sourceId  String           @map("source_id") @db.Uuid
+  source    SourceConnection @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  courseId  Int              @map("course_id")
+  course    Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  url       String
+  title     String
+  /// Plain text, capped.
+  text      String
+  /// Headings, paragraphs and tables (canvas/richText.ts Block[]), capped.
+  blocks    Json             @default("[]")
+  fetchedAt DateTime         @map("fetched_at") @db.Timestamptz(3)
+  removedAt DateTime?        @map("removed_at") @db.Timestamptz(3)
+
+  @@unique([sourceId, url])
+  @@index([userId, courseId])
+  @@map("website_pages")
+}
+
+/// Bytes of a downloaded course-website file, stored once per user and content hash.
+model WebsiteBlob {
+  id        Int          @id @default(autoincrement())
+  userId    String       @map("user_id") @db.Uuid
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sha256    String       @db.VarChar(64)
+  sizeBytes Int          @map("size_bytes")
+  content   Bytes
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  files     CourseFile[]
+
+  @@unique([userId, sha256])
+  @@map("website_blobs")
+}
+
+/// A website URL the last crawl could not read (sign-in needed or failed); retried first next time.
+model PendingResource {
+  id            Int              @id @default(autoincrement())
+  userId        String           @map("user_id") @db.Uuid
+  sourceId      String           @map("source_id") @db.Uuid
+  source        SourceConnection @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  url           String
+  title         String
+  /// website_page or website_file.
+  itemType      String           @map("item_type")
+  /// AUTH_REQUIRED, DISCOVERED, FAILED or FETCHED.
+  state         String
+  lastErrorCode String?          @map("last_error_code")
+  discoveredAt  DateTime         @default(now()) @map("discovered_at") @db.Timestamptz(3)
+  lastAttemptAt DateTime         @map("last_attempt_at") @db.Timestamptz(3)
+
+  @@unique([sourceId, url])
+  @@index([userId])
+  @@map("pending_resources")
+}
+
+/// A Gradescope course the student linked to one of their courses.
+model ProviderCourseMap {
+  id               Int              @id @default(autoincrement())
+  userId           String           @map("user_id") @db.Uuid
+  sourceId         String           @map("source_id") @db.Uuid
+  source           SourceConnection @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  providerCourseId String           @map("provider_course_id")
+  courseId         Int              @map("course_id")
+  course           Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  courseCode       String           @map("course_code")
+  name             String
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([sourceId, providerCourseId])
+  @@index([userId])
+  @@map("provider_course_maps")
+}
+
+/// One Gradescope assignment of a mapped course: its allow-listed facts and the task it belongs to.
+model ProviderAssignment {
+  id                   Int              @id @default(autoincrement())
+  userId               String           @map("user_id") @db.Uuid
+  sourceId             String           @map("source_id") @db.Uuid
+  source               SourceConnection @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  courseId             Int              @map("course_id")
+  course               Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  providerCourseId     String           @map("provider_course_id")
+  providerAssignmentId String           @map("provider_assignment_id")
+  title                String
+  url                  String
+  /// provider/gradescope.ts ProviderFacts (allow-listed fields only).
+  facts                Json
+  taskId               Int?             @map("task_id")
+  task                 Task?            @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  /// strong, confirmed, separate or created; null while the student must choose (mapping required).
+  binding              String?
+  firstSeenAt          DateTime         @default(now()) @map("first_seen_at") @db.Timestamptz(3)
+  lastSeenAt           DateTime         @map("last_seen_at") @db.Timestamptz(3)
+  removedAt            DateTime?        @map("removed_at") @db.Timestamptz(3)
+
+  @@unique([sourceId, providerCourseId, providerAssignmentId])
+  @@index([userId, taskId])
+  @@map("provider_assignments")
 }

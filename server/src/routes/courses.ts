@@ -4,6 +4,7 @@ import { currentAuth } from "../auth/middleware.js";
 import { CanvasError } from "../canvas/client.js";
 import { findSyllabus } from "../canvas/syllabus.js";
 import { keepSyllabus, keptSyllabus } from "../canvas/syllabusStore.js";
+import { isWebsiteCourse, withWebsiteSources } from "../sources/website/syllabus.js";
 import type { Db } from "../db.js";
 import type { Course } from "../generated/prisma/client.js";
 import { HttpError } from "../http/errors.js";
@@ -137,6 +138,14 @@ export function coursesRouter(db: Db, services: Services): Router {
       if (answerKept()) return;
       throw previewUnavailable();
     }
+    if (isWebsiteCourse(course)) {
+      // A course only a website knows: its syllabus comes from the pages and files the last crawl kept.
+      const syllabus = await withWebsiteSources(db, userId, course.id, { found: false, sources: [] });
+      const now = new Date();
+      await keepSyllabus(db, userId, course.id, syllabus, now);
+      res.json({ ...syllabus, fetched_at: now.toISOString(), saved_copy: false });
+      return;
+    }
     const connection = await db.canvasConnection.findUnique({ where: { userId } });
     if (!connection) {
       if (answerKept()) return;
@@ -149,7 +158,7 @@ export function coursesRouter(db: Db, services: Services): Router {
     const client = await services.credentials.routed(userId);
     try {
       if (!client?.hasCredential()) throw new CanvasError("TOKEN_REJECTED", "Canvas needs you to sign in again.");
-      const syllabus = await findSyllabus(client, course.canvasId, course.htmlUrl, files);
+      const syllabus = await withWebsiteSources(db, userId, course.id, await findSyllabus(client, course.canvasId, course.htmlUrl, files));
       const now = new Date();
       await keepSyllabus(db, userId, course.id, syllabus, now);
       res.json({ ...syllabus, fetched_at: now.toISOString(), saved_copy: false });

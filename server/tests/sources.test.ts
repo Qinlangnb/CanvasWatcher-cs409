@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { mergeSetCookies } from "../src/canvas/client.js";
 import { endOfDay, expiration } from "../src/canvas/credentials.js";
 import { parseSessionImport, shellSplit } from "../src/canvas/sessionImport.js";
+import { registerSourceAdapter, sourceAdapter, unregisterSourceAdapter } from "../src/sources/registry.js";
 import { CANVAS_ORIGIN, CANVAS_SESSION, CANVAS_TOKEN, fakeCanvas, seedCourse } from "./fakeCanvas.js";
 import { connectCanvas, db, resetDatabase, services, signUp, syncNow, type Browser } from "./helpers.js";
 
@@ -333,9 +334,16 @@ describe("sources", () => {
     expect((await ada.send("post", "/api/sources/canvas", { body: { base_url: CANVAS_ORIGIN } })).status).toBe(409);
     const renamed = await ada.send("patch", `/api/sources/${created.body.id}`, { body: { name: "Canvas (school)", default_auth_method: "browser_session" } });
     expect(renamed.body.name).toBe("Canvas (school)");
-    const website = await ada.send("post", "/api/sources", { body: { type: "website", base_url: "https://courses.example.edu/" } });
-    expect(website.status).toBe(501);
-    expect(website.body.code).toBe("SOURCE_TYPE_UNAVAILABLE");
+    // Website support is installed in this release; without its module the type is refused.
+    const installed = sourceAdapter("WEBSITE");
+    unregisterSourceAdapter("WEBSITE");
+    try {
+      const website = await ada.send("post", "/api/sources", { body: { type: "website", base_url: "https://courses.example.edu/" } });
+      expect(website.status).toBe(501);
+      expect(website.body.code).toBe("SOURCE_TYPE_UNAVAILABLE");
+    } finally {
+      if (installed) registerSourceAdapter(installed);
+    }
     expect((await ada.send("get", "/api/settings/credential-storage")).body).toEqual({ mode: "server_encrypted" });
   });
 

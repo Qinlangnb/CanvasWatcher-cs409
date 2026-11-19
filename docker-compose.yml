@@ -49,6 +49,10 @@ services:
       CANVAS_OAUTH_CLIENT_ID: ${CANVAS_OAUTH_CLIENT_ID:-}
       CANVAS_OAUTH_CLIENT_SECRET: ${CANVAS_OAUTH_CLIENT_SECRET:-}
       CANVAS_OAUTH_REDIRECT_URI: ${CANVAS_OAUTH_REDIRECT_URI:-}
+      # Course websites / Gradescope: never reach private addresses; website files live in PostgreSQL.
+      SOURCES_ALLOW_PRIVATE_HOSTS: ${SOURCES_ALLOW_PRIVATE_HOSTS:-false}
+      WEBSITE_STORAGE_QUOTA_MB: ${WEBSITE_STORAGE_QUOTA_MB:-1024}
+      WEBSITE_MAX_FILE_MB: ${WEBSITE_MAX_FILE_MB:-25}
     expose:
       - "8000"
     depends_on:

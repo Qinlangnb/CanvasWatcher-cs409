@@ -493,7 +493,12 @@ export function FileTable({ files, showCourse = true }: { files: CourseFile[]; s
               <FileIcon size={18} />
               <span>
                 {file.name}
-                <span className="file-type">{FILE_TYPE_LABELS[file.type] ?? "Other"}</span>
+                <span className="file-type">
+                  {FILE_TYPE_LABELS[file.type] ?? "Other"}
+                  {/* Course-website files are kept here; one that came back as a sign-in page can't be downloaded. */}
+                  {file.source === "website" ? " · Website" : ""}
+                  {file.integrity_status === "INVALID_DOWNLOAD" ? " · not a valid download" : ""}
+                </span>
               </span>
             </th>
             {showCourse ? (

@@ -23,6 +23,14 @@ export interface SourceUi {
   CardExtras?: ComponentType<CardExtrasProps>;
   /** Replaces the card's default authentication line. */
   authNote?: (source: SourceConnection) => ReactNode;
+  /** The editor that Settings → Sources opens for ?edit=<id> (the sidebar's Manage). */
+  EditDialog?: ComponentType<EditDialogProps>;
+}
+
+export interface EditDialogProps {
+  source: SourceConnection;
+  open: boolean;
+  onClose: () => void;
 }
 
 export interface SourceTypeInfo {

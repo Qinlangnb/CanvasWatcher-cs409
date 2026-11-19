@@ -29,6 +29,8 @@ export interface CanvasAssignment {
   points_possible?: number | null;
   html_url?: string;
   submission_types?: string[];
+  /** Present for assignments that launch an external tool such as Gradescope. */
+  external_tool_tag_attributes?: { url?: string | null } | null;
   submission?: {
     workflow_state?: string;
     submitted_at?: string | null;

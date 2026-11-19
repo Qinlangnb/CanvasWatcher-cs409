@@ -157,7 +157,7 @@ export function changeSummary(kind: ItemKind, type: ChangeType, title: string, f
     if (type === "REMOVED") return `File removed: ${title}`;
     return `File updated: ${title}`;
   }
-  const noun = kind === "ASSIGNMENT" ? "assignment" : "announcement";
+  const noun = kind === "ASSIGNMENT" ? "assignment" : kind === "PAGE" ? "page" : "announcement";
   if (type === "CREATED") return `New ${noun}: "${title}"`;
   if (type === "REMOVED") return `${capitalize(noun)} removed: "${title}"`;
   const labels = fields.map((field) => FIELD_LABELS[field] ?? field.replaceAll("_", " "));

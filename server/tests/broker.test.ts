@@ -189,6 +189,8 @@ describe("Auth Broker", () => {
   });
 
   it("provider sign-ins go through the registered verifier and are rejected without one", async () => {
+    // The built-in Gradescope module is taken out, so this test supplies its own verifier.
+    unregisterSourceAdapter("GRADESCOPE");
     const ada = await signUp();
     const user = await db.user.findFirstOrThrow();
     const source = await db.sourceConnection.create({
