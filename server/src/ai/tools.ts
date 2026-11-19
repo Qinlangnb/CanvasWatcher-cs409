@@ -1,7 +1,6 @@
 // What AI Chat can look up. Every tool only reads, and only the signed-in user's own rows.
 import { DateTime } from "luxon";
 import { z } from "zod";
-import { openToken } from "../canvas/client.js";
 import { blocksText } from "../canvas/richText.js";
 import { findSyllabus, type Syllabus } from "../canvas/syllabus.js";
 import { keepSyllabus, keptSyllabus } from "../canvas/syllabusStore.js";
@@ -160,17 +159,20 @@ async function readSyllabus(ctx: ToolContext, course: { id: number; canvasId: st
   if (kept && ctx.now.getTime() - kept.fetchedAt.getTime() < 6 * 60 * 60_000) return kept;
   const connection = await ctx.db.canvasConnection.findUnique({ where: { userId: ctx.userId } });
   if (!connection || connection.status !== "OK") return kept;
+  const client = await ctx.services.credentials.routed(ctx.userId);
+  if (!client) return kept;
   try {
     const files = await ctx.db.courseFile.findMany({
       where: { userId: ctx.userId, courseId: course.id, removedAt: null },
       select: { id: true, canvasId: true, displayName: true },
     });
-    const client = ctx.services.canvas(connection.baseUrl, openToken(ctx.services.secrets, connection.tokenCiphertext, ctx.userId));
     const syllabus = await findSyllabus(client, course.canvasId, course.htmlUrl, files);
     await keepSyllabus(ctx.db, ctx.userId, course.id, syllabus, ctx.now);
     return { syllabus, fetchedAt: ctx.now };
   } catch {
     return kept;
+  } finally {
+    await client.flush();
   }
 }
 

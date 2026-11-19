@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { currentAuth } from "../auth/middleware.js";
-import { CanvasError, openToken } from "../canvas/client.js";
+import { CanvasError } from "../canvas/client.js";
 import type { Db } from "../db.js";
 import type { Prisma } from "../generated/prisma/client.js";
 import { HttpError } from "../http/errors.js";
@@ -86,8 +86,9 @@ export function filesRouter(db: Db, services: Services): Router {
     if (!connection) throw notConnected();
 
     let link: URL;
+    const client = await services.credentials.routed(userId);
     try {
-      const client = services.canvas(connection.baseUrl, openToken(services.secrets, connection.tokenCiphertext, userId));
+      if (!client?.hasCredential()) throw new CanvasError("TOKEN_REJECTED", "Canvas needs you to sign in again.");
       const fresh = await client.file(file.course.canvasId, file.canvasId);
       link = new URL(fresh.url ?? "");
     } catch (error) {
@@ -96,13 +97,15 @@ export function filesRouter(db: Db, services: Services): Router {
         throw error;
       }
       if (error.kind === "TOKEN_REJECTED") {
-        await db.canvasConnection.updateMany({ where: { userId }, data: { status: "TOKEN_REJECTED" } });
+        await services.credentials.markAuthRequired(userId);
         throw new HttpError(409, "CANVAS_RECONNECT_REQUIRED", "Canvas no longer accepts your access token. Reconnect Canvas in Settings.");
       }
       if (error.kind === "FORBIDDEN" || error.kind === "NOT_FOUND") {
         throw new HttpError(404, "FILE_UNAVAILABLE", "Canvas no longer offers this file to your account.");
       }
       throw new HttpError(502, "CANVAS_UNAVAILABLE", error.message);
+    } finally {
+      await client?.flush();
     }
     if (link.protocol !== "https:") throw new HttpError(502, "CANVAS_UNAVAILABLE", "Canvas returned an unsafe download link.");
     res.redirect(302, link.toString());

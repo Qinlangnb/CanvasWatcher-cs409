@@ -4,6 +4,8 @@ import type { CanvasAnnouncement, CanvasAssignment, CanvasCourse, CanvasFile, Ca
 export const CANVAS_ORIGIN = "https://canvas.example.edu";
 /** Fixture token accepted by the fake Canvas; not a real credential. */
 export const CANVAS_TOKEN = "fake-canvas-token-0001";
+/** Fixture browser-session cookie value accepted by the fake Canvas. */
+export const CANVAS_SESSION = "fake-session-0001";
 
 function json(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
@@ -28,6 +30,20 @@ export interface FakeModule {
 export class FakeCanvas {
   token = CANVAS_TOKEN;
   user: CanvasUser = { id: 42, name: "Ada Lovelace" };
+  /** Value of the canvas_session cookie a signed-in browser sends; null signs every browser out. */
+  session: string | null = CANVAS_SESSION;
+  /** Who the session belongs to, when not `user`. */
+  sessionUser: CanvasUser | null = null;
+  /** How Canvas turns away a signed-out browser: a 401, a redirect to the login page, or that page itself. */
+  sessionRejection: "401" | "redirect" | "html" = "401";
+  /** When set, answers to a browser session also rotate this cookie. */
+  rotateCookie: string | null = null;
+  /** More bearer tokens and whom they sign in as (another account, OAuth access tokens). */
+  extraTokens = new Map<string, CanvasUser>();
+  /** OAuth: authorization codes and refresh tokens the token endpoint accepts. */
+  oauthCodes = new Map<string, CanvasUser>();
+  oauthRefresh = new Map<string, CanvasUser>();
+  oauthIssued = 0;
   courses: CanvasCourse[] = [];
   assignments = new Map<string, CanvasAssignment[]>();
   files = new Map<string, CanvasFile[]>();
@@ -47,6 +63,14 @@ export class FakeCanvas {
   reset(): void {
     this.token = CANVAS_TOKEN;
     this.user = { id: 42, name: "Ada Lovelace" };
+    this.session = CANVAS_SESSION;
+    this.sessionUser = null;
+    this.sessionRejection = "401";
+    this.rotateCookie = null;
+    this.extraTokens.clear();
+    this.oauthCodes.clear();
+    this.oauthRefresh.clear();
+    this.oauthIssued = 0;
     this.courses = [];
     this.assignments.clear();
     this.files.clear();
@@ -60,18 +84,45 @@ export class FakeCanvas {
     this.requests.length = 0;
   }
 
+  /** Answers like Canvas; with `rotateCookie`, every answer to a signed-in browser also sets a cookie. */
   readonly fetch: typeof fetch = async (input, init) => {
+    const response = await this.handle(input, init);
+    const cookie = new Headers(init?.headers).get("cookie");
+    if (this.rotateCookie && cookie?.includes(`canvas_session=${this.session}`) && response.status === 200) {
+      response.headers.append("set-cookie", `_csrf_token=${this.rotateCookie}; path=/; secure`);
+    }
+    return response;
+  };
+
+  private readonly handle: typeof fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     this.requests.push(url.pathname + url.search);
     if (this.gate) await this.gate;
     if (url.origin !== CANVAS_ORIGIN) throw new TypeError("fetch failed");
-    const auth = new Headers(init?.headers).get("authorization");
-    if (auth !== `Bearer ${this.token}`) return json({ errors: [{ message: "Invalid access token." }] }, 401);
+    if (url.pathname === "/login/oauth2/token" && init?.method === "POST") return this.oauthToken(String(init.body));
+    const headers = new Headers(init?.headers);
+    const auth = headers.get("authorization");
+    const cookie = headers.get("cookie");
+    let who: CanvasUser | null = null;
+    if (auth?.startsWith("Bearer ")) {
+      const presented = auth.slice(7);
+      who = presented === this.token ? this.user : (this.extraTokens.get(presented) ?? null);
+    } else if (cookie) {
+      const value = /(?:^|;\s*)canvas_session=([^;]*)/.exec(cookie)?.[1];
+      if (this.session && value === this.session) {
+        who = this.sessionUser ?? this.user;
+      } else if (this.sessionRejection === "redirect") {
+        return new Response(null, { status: 302, headers: { location: `${CANVAS_ORIGIN}/login/canvas` } });
+      } else if (this.sessionRejection === "html") {
+        return new Response('<form action="/login"><input type="password"></form>', { status: 200, headers: { "content-type": "text/html" } });
+      }
+    }
+    if (!who) return json({ errors: [{ message: "Invalid access token." }] }, 401);
     const failure = this.failures.get(url.pathname);
     if (failure) return json({ errors: [{ message: "failure" }] }, failure);
 
     const path = url.pathname;
-    if (path === "/api/v1/users/self") return json(this.user);
+    if (path === "/api/v1/users/self" || path === "/api/v1/users/self/profile") return json(who);
     if (path === "/api/v1/courses") return this.page(url, this.courses);
     if (path === "/api/v1/announcements") {
       const courseId = url.searchParams.get("context_codes[]")?.replace(/^course_/, "") ?? "";
@@ -107,8 +158,24 @@ export class FakeCanvas {
     return json({ errors: [{ message: "not found" }] }, 404);
   };
 
-  readonly factory: CanvasClientFactory = (baseUrl, token) =>
-    new CanvasClient({ baseUrl, token, fetch: this.fetch, retries: 0 });
+  readonly factory: CanvasClientFactory = (baseUrl, auth) =>
+    new CanvasClient({ baseUrl, auth, fetch: this.fetch, retries: 0 });
+
+  /** Canvas's OAuth token endpoint: codes and refresh tokens become fresh access tokens. */
+  private oauthToken(body: string): Response {
+    const form = new URLSearchParams(body);
+    const grant = form.get("grant_type");
+    const key = grant === "authorization_code" ? (form.get("code") ?? "") : (form.get("refresh_token") ?? "");
+    const user = grant === "authorization_code" ? this.oauthCodes.get(key) : this.oauthRefresh.get(key);
+    if (!user) return json({ error: "invalid_grant" }, 400);
+    if (grant === "authorization_code") this.oauthCodes.delete(key);
+    this.oauthIssued += 1;
+    const access = `oauth-access-${this.oauthIssued}`;
+    const refresh = `oauth-refresh-${this.oauthIssued}`;
+    this.extraTokens.set(access, user);
+    this.oauthRefresh.set(refresh, user);
+    return json({ access_token: access, refresh_token: refresh, expires_in: 3600, token_type: "Bearer" });
+  }
 
   private page(url: URL, rows: unknown[]): Response {
     const page = Number(url.searchParams.get("page") ?? "1");

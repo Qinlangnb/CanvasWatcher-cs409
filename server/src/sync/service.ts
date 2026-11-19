@@ -1,5 +1,6 @@
 import type { Logger } from "pino";
-import { CanvasError, openToken, type CanvasClient, type CanvasClientFactory } from "../canvas/client.js";
+import { CanvasError, type CanvasClient } from "../canvas/client.js";
+import type { CanvasCredentials } from "../canvas/credentials.js";
 import { findSyllabus } from "../canvas/syllabus.js";
 import { keepSyllabus, syllabusIsStale } from "../canvas/syllabusStore.js";
 import {
@@ -18,8 +19,7 @@ import {
 import type { CanvasAssignment, CanvasCourse, CanvasFile } from "../canvas/types.js";
 import type { Db } from "../db.js";
 import type { Prisma, SyncRun } from "../generated/prisma/client.js";
-import type { ChangeType, ItemKind, SyncStatus, SyncTrigger } from "../generated/prisma/enums.js";
-import type { SecretBox } from "../security/secretBox.js";
+import type { ChangeType, ItemKind, SourceHealth, SyncStatus, SyncTrigger } from "../generated/prisma/enums.js";
 
 const DAY = 24 * 60 * 60_000;
 /** How long a sync may run without renewing its lease before another may take over. */
@@ -32,15 +32,58 @@ const ANNOUNCEMENT_WINDOW_MS = 120 * DAY;
 export interface SyncServiceOptions {
   db: Db;
   logger: Logger;
-  secrets: SecretBox;
-  canvas: CanvasClientFactory;
+  credentials: CanvasCredentials;
 }
+
+/** One Canvas resource a sync could not read, shown in the source's diagnostics. */
+export interface ResourceDiagnostic {
+  resource: string;
+  course: string | null;
+  code: string;
+  http_status: number | null;
+  /** Pages a student may simply not see (403/404): listed, but they do not degrade the source. */
+  optional: boolean;
+}
+
+const MAX_DIAGNOSTICS = 50;
+
+const DIAGNOSTIC_CODES: Record<string, string> = {
+  TOKEN_REJECTED: "auth_required",
+  FORBIDDEN: "permission_denied",
+  NOT_FOUND: "resource_not_found",
+  RATE_LIMITED: "rate_limited",
+  UNREACHABLE: "server_error",
+  BAD_RESPONSE: "invalid_response",
+};
+
+export function diagnosticCode(error: unknown): string {
+  return error instanceof CanvasError ? (DIAGNOSTIC_CODES[error.kind] ?? "invalid_response") : "internal_error";
+}
+
+/** HEALTHY, DEGRADED (some resources failed), AUTH_REQUIRED or ERROR (nothing could be synced). */
+export function classifyHealth(status: SyncStatus, tokenRejected: boolean, diagnostics: ResourceDiagnostic[], coursesSynced: number): SourceHealth {
+  if (tokenRejected) return "AUTH_REQUIRED";
+  if (status === "FAILED") return "ERROR";
+  const problems = diagnostics.filter((row) => !row.optional);
+  if (problems.length === 0) return "HEALTHY";
+  if (coursesSynced === 0 || problems.every((row) => row.resource === "assignment")) return "ERROR";
+  return "DEGRADED";
+}
+
+export const HEALTH_SUMMARIES: Record<SourceHealth, string | null> = {
+  UNKNOWN: null,
+  HEALTHY: null,
+  DEGRADED: "Some resources could not be read. Available course content remains usable.",
+  AUTH_REQUIRED: "Sign in again to resume source synchronization.",
+  ERROR: "Source synchronization failed. Check authentication and retry.",
+};
 
 interface SyncContext {
   userId: string;
   client: CanvasClient;
   baseUrl: string;
   lease: { until: Date };
+  diagnostics: ResourceDiagnostic[];
 }
 
 interface CourseResult {
@@ -81,15 +124,13 @@ async function eachLimit<T>(items: T[], limit: number, work: (item: T) => Promis
 export class SyncService {
   private readonly db: Db;
   private readonly logger: Logger;
-  private readonly secrets: SecretBox;
-  private readonly canvas: CanvasClientFactory;
+  private readonly credentials: CanvasCredentials;
   private readonly inFlight = new Set<Promise<void>>();
 
   constructor(options: SyncServiceOptions) {
     this.db = options.db;
     this.logger = options.logger;
-    this.secrets = options.secrets;
-    this.canvas = options.canvas;
+    this.credentials = options.credentials;
   }
 
   /**
@@ -131,8 +172,8 @@ export class SyncService {
     const due = await this.db.canvasConnection.findMany({
       where: {
         status: "OK",
-        // Preview accounts have no Canvas token to sync with.
-        user: { previewExpiresAt: null },
+        // Preview accounts have no Canvas token to sync with; a disabled Canvas source is skipped.
+        user: { previewExpiresAt: null, sources: { none: { type: "CANVAS", enabled: false } } },
         OR: [{ lastSyncedAt: null }, { lastSyncedAt: { lt: new Date(now.getTime() - intervalMs) } }],
         AND: [{ OR: [{ syncLeaseUntil: null }, { syncLeaseUntil: { lt: now } }] }],
       },
@@ -180,14 +221,12 @@ export class SyncService {
     let tokenRejected = false;
     let coursesSynced = 0;
     let changesDetected = 0;
+    const diagnostics: ResourceDiagnostic[] = [];
+    const client = await this.credentials.routed(userId);
     try {
-      const connection = await this.db.canvasConnection.findUniqueOrThrow({ where: { userId } });
-      const context: SyncContext = {
-        userId,
-        client: this.canvas(connection.baseUrl, openToken(this.secrets, connection.tokenCiphertext, userId)),
-        baseUrl: connection.baseUrl,
-        lease,
-      };
+      if (!client) throw new CanvasError("TOKEN_REJECTED", "Connect Canvas to sync.");
+      if (!client.hasCredential()) throw new CanvasError("TOKEN_REJECTED", "Canvas needs you to sign in again. Open Settings → Sources.");
+      const context: SyncContext = { userId, client, baseUrl: client.connection.baseUrl, lease, diagnostics };
       const courses = (await context.client.courses()).filter(isReadableCourse);
       const problems: string[] = [];
       await eachLimit(courses, COURSE_CONCURRENCY, async (course) => {
@@ -198,7 +237,9 @@ export class SyncService {
           problems.push(...result.problems);
         } catch (courseError) {
           if (isFatal(courseError)) throw courseError;
-          problems.push(`${course.course_code ?? course.name ?? course.id}: ${this.describe(courseError)}`);
+          const label = course.course_code ?? course.name ?? String(course.id);
+          problems.push(`${label}: ${this.describe(courseError)}`);
+          diagnostics.push(diagnostic("course", label, courseError, false));
         }
         await this.renewLease(userId, lease);
       });
@@ -211,8 +252,23 @@ export class SyncService {
       status = "FAILED";
       tokenRejected = isFatal(runError);
       error = this.describe(runError);
+      diagnostics.push(diagnostic("courses", null, runError, false));
     }
+    await client?.flush();
+    if (tokenRejected) await this.credentials.markAuthRequired(userId);
     const finishedAt = new Date();
+    const health = classifyHealth(status, tokenRejected, diagnostics, coursesSynced);
+    await this.db.sourceConnection.updateMany({
+      where: { userId, type: "CANVAS" },
+      data: {
+        lastSyncAt: finishedAt,
+        ...(status === "FAILED" ? {} : { lastSuccessAt: finishedAt, state: "READY" }),
+        lastError: error,
+        health,
+        healthSummary: HEALTH_SUMMARIES[health],
+        diagnostics: diagnostics.slice(0, MAX_DIAGNOSTICS) as unknown as Prisma.InputJsonValue,
+      },
+    });
     await this.db.syncRun.update({
       where: { id: run.id },
       data: { status, error, coursesSynced, changesDetected, finishedAt },
@@ -244,14 +300,20 @@ export class SyncService {
   }
 
   /** Fetches one resource; a page the student may not open is skipped instead of failing the course. */
-  private async section<T>(label: string, fetchRows: () => Promise<T[]>): Promise<Section<T>> {
+  private async section<T>(
+    context: SyncContext,
+    course: string,
+    resource: string,
+    label: string,
+    fetchRows: () => Promise<T[]>,
+  ): Promise<Section<T>> {
     try {
       return { ok: true, rows: await fetchRows() };
     } catch (error) {
       if (isFatal(error)) throw error;
-      if (error instanceof CanvasError && (error.kind === "FORBIDDEN" || error.kind === "NOT_FOUND")) {
-        return { ok: false, problem: null };
-      }
+      const skipped = error instanceof CanvasError && (error.kind === "FORBIDDEN" || error.kind === "NOT_FOUND");
+      context.diagnostics.push(diagnostic(resource, course, error, skipped));
+      if (skipped) return { ok: false, problem: null };
       return { ok: false, problem: `${label}: ${this.describe(error)}` };
     }
   }
@@ -277,9 +339,9 @@ export class SyncService {
     const baseline = !existing;
 
     const [assignments, files, announcements] = await Promise.all([
-      this.section("Assignments", () => client.assignments(canvasId)),
-      this.section("Files", () => client.files(canvasId)),
-      this.section("Announcements", () =>
+      this.section(context, fields.courseCode, "assignment", "Assignments", () => client.assignments(canvasId)),
+      this.section(context, fields.courseCode, "file", "Files", () => client.files(canvasId)),
+      this.section(context, fields.courseCode, "announcement", "Announcements", () =>
         client.announcements(canvasId, new Date(now.getTime() - ANNOUNCEMENT_WINDOW_MS), new Date(now.getTime() + DAY)),
       ),
     ]);
@@ -477,6 +539,16 @@ export class SyncService {
     if (events.length > 0) await tx.changeEvent.createMany({ data: events });
     return events.length;
   }
+}
+
+function diagnostic(resource: string, course: string | null, error: unknown, optional: boolean): ResourceDiagnostic {
+  return {
+    resource,
+    course,
+    code: diagnosticCode(error),
+    http_status: error instanceof CanvasError ? error.status : null,
+    optional,
+  };
 }
 
 interface Scope {

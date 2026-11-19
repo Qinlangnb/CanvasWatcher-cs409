@@ -56,6 +56,22 @@ const environment = z.object({
     .default("https://api.deepseek.com/v1")
     .refine((value) => /^https?:\/\/[^\s/?#]+(?:\/[^\s?#]*)?$/.test(value), "AI_BASE_URL must be an http(s) URL without a query"),
   AI_MODEL: z.string().trim().min(1).max(100).default("deepseek-flash"),
+  /**
+   * The desktop Auth Broker the browser talks to for browser sign-in (see auth-broker/). It always runs
+   * on the student's own computer, so this is a loopback address.
+   */
+  AUTH_BROKER_URL: z
+    .string()
+    .trim()
+    .default("http://127.0.0.1:8765")
+    .refine((value) => /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d{2,5}$/.test(value), "AUTH_BROKER_URL must be a loopback http origin with a port"),
+  /**
+   * Canvas OAuth2 (optional): a Canvas developer key. All three must be set; the redirect URI must be
+   * `<public site>/<PUBLIC_BASE_PATH>/api/auth/canvas/oauth/callback` (https) or a loopback http address.
+   */
+  CANVAS_OAUTH_CLIENT_ID: z.string().trim().default(""),
+  CANVAS_OAUTH_CLIENT_SECRET: z.string().trim().default(""),
+  CANVAS_OAUTH_REDIRECT_URI: z.string().trim().default(""),
 });
 
 export interface Config {
@@ -76,6 +92,35 @@ export interface Config {
   previewSource: string | null;
   /** AI Chat's provider, or null when it is off. */
   ai: AiConfig | null;
+  /** PUBLIC_BASE_PATH without a trailing slash; "" at the site root. */
+  basePath: string;
+  authBrokerUrl: string;
+  /** Canvas OAuth2, or null when it is not set up (or set up wrongly). */
+  canvasOAuth: CanvasOAuthConfig | null;
+}
+
+export interface CanvasOAuthConfig {
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+}
+
+/**
+ * The redirect URI must come back to this API's callback: on a loopback http address while developing,
+ * otherwise over https under PUBLIC_BASE_PATH. No query, fragment or user name, which a redirect could abuse.
+ */
+export function oauthRedirectAllowed(value: string, basePath: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.username || url.password || url.search || url.hash || value.includes("#") || value.includes("?")) return false;
+  if (url.protocol === "http:") {
+    return ["localhost", "127.0.0.1"].includes(url.hostname) && url.port !== "" && url.pathname === "/api/auth/canvas/oauth/callback";
+  }
+  return url.protocol === "https:" && url.pathname === `${basePath}/api/auth/canvas/oauth/callback`;
 }
 
 export interface AiConfig {
@@ -100,6 +145,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
   }
   const values = parsed.data;
   const allowedOrigins = list(values.ALLOWED_ORIGINS).map((origin) => origin.replace(/\/+$/, ""));
+  const basePath = normalizeBasePath(values.PUBLIC_BASE_PATH) ?? "";
   return {
     env: values.NODE_ENV,
     port: values.PORT,
@@ -112,12 +158,22 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     secureCookies: values.COOKIE_SECURE
       ? values.COOKIE_SECURE === "true"
       : allowedOrigins.every((origin) => origin.startsWith("https://")),
-    cookiePath: normalizeBasePath(values.PUBLIC_BASE_PATH) || "/",
+    cookiePath: basePath || "/",
     trustProxy: values.TRUST_PROXY,
     logLevel: values.LOG_LEVEL,
     previewSource: values.PREVIEW_SOURCE_USERNAME || null,
     ai: values.AI_API_KEY
       ? { baseUrl: values.AI_BASE_URL.replace(/\/+$/, ""), apiKey: values.AI_API_KEY, model: values.AI_MODEL }
       : null,
+    basePath,
+    authBrokerUrl: values.AUTH_BROKER_URL,
+    canvasOAuth:
+      values.CANVAS_OAUTH_CLIENT_ID && values.CANVAS_OAUTH_CLIENT_SECRET && oauthRedirectAllowed(values.CANVAS_OAUTH_REDIRECT_URI, basePath)
+        ? {
+            clientId: values.CANVAS_OAUTH_CLIENT_ID,
+            clientSecret: values.CANVAS_OAUTH_CLIENT_SECRET,
+            redirectUri: values.CANVAS_OAUTH_REDIRECT_URI,
+          }
+        : null,
   };
 }

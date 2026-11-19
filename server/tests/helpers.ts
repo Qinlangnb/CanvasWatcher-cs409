@@ -56,6 +56,8 @@ interface SendOptions {
   origin?: string | null;
   /** Set to false to leave out the CSRF header the frontend normally sends. */
   csrf?: boolean;
+  /** Extra request headers, for example X-AW-Broker. */
+  headers?: Record<string, string>;
 }
 
 /** Keeps cookies between requests and sends Origin and CSRF headers like the frontend's `api()`. */
@@ -74,6 +76,7 @@ export class Browser {
     }
     const csrf = this.cookies.get(CSRF_COOKIE);
     if (csrf && options.csrf !== false) req.set(CSRF_HEADER, csrf);
+    if (options.headers) req.set(options.headers);
     const res = options.body === undefined ? await req : await req.send(options.body);
     for (const line of setCookieLines(res)) {
       const pair = line.split(";", 1)[0] ?? "";

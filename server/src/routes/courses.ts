@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { currentAuth } from "../auth/middleware.js";
-import { CanvasError, openToken } from "../canvas/client.js";
+import { CanvasError } from "../canvas/client.js";
 import { findSyllabus } from "../canvas/syllabus.js";
 import { keepSyllabus, keptSyllabus } from "../canvas/syllabusStore.js";
 import type { Db } from "../db.js";
@@ -95,8 +95,9 @@ export function coursesRouter(db: Db, services: Services): Router {
       where: { userId, courseId: course.id, removedAt: null },
       select: { id: true, canvasId: true, displayName: true },
     });
+    const client = await services.credentials.routed(userId);
     try {
-      const client = services.canvas(connection.baseUrl, openToken(services.secrets, connection.tokenCiphertext, userId));
+      if (!client?.hasCredential()) throw new CanvasError("TOKEN_REJECTED", "Canvas needs you to sign in again.");
       const syllabus = await findSyllabus(client, course.canvasId, course.htmlUrl, files);
       const now = new Date();
       await keepSyllabus(db, userId, course.id, syllabus, now);
@@ -104,12 +105,14 @@ export function coursesRouter(db: Db, services: Services): Router {
     } catch (error) {
       if (!(error instanceof CanvasError)) throw error;
       if (error.kind === "TOKEN_REJECTED") {
-        await db.canvasConnection.updateMany({ where: { userId }, data: { status: "TOKEN_REJECTED" } });
+        await services.credentials.markAuthRequired(userId);
         if (answerKept()) return;
         throw new HttpError(409, "CANVAS_RECONNECT_REQUIRED", "Canvas no longer accepts your access token. Reconnect Canvas in Settings.");
       }
       if (answerKept()) return;
       throw new HttpError(502, "CANVAS_UNAVAILABLE", error.message);
+    } finally {
+      await client?.flush();
     }
   });
 

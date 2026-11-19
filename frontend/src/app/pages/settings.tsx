@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation } from "react-router";
 import { ApiError } from "../api";
 import { ConnectCanvasForm } from "../canvas";
+import { SourcesSection } from "../sources/settingsSources";
 import { ImportCalendarDialog } from "../events";
 import { EndPreviewDialog, PreviewUnavailable, UnavailableButton } from "../preview";
 import { formatDateTime, formatMinuteOfDay, formatMinutes, plural, syncOutcome, timeAgo } from "../format";
@@ -193,7 +194,9 @@ function CanvasConnectionSection() {
           {rejected ? (
             <Alert tone="warning">Canvas no longer accepts the saved token. It may have expired or been deleted in Canvas.</Alert>
           ) : null}
-          <p className="muted">A token from a different Canvas account replaces everything synced so far.</p>
+          <p className="muted">
+            The token must belong to the connected Canvas account. Other sign-in methods are in <a href="#sources">Sources</a>.
+          </p>
           <ConnectCanvasForm
             initialBaseUrl={data.base_url}
             submitLabel="Save new token"
@@ -569,10 +572,11 @@ export function SettingsPage() {
   }, [location.hash, preview]);
   return (
     <div className="page">
-      <PageHeader title="Settings" description="Your study plan, calendars, account and the Canvas connection." />
+      <PageHeader title="Settings" description="Your study plan, calendars, account, sources and the Canvas connection." />
       <div className="settings-grid">
         <StudyPlanSection />
         <CalendarsSection />
+        <SourcesSection />
         <CanvasSection />
         <ProfileSection />
         {preview ? null : <PasswordSection />}

@@ -14,31 +14,36 @@ datasource db {
 }
 
 model User {
-  id               String            @id @default(uuid()) @db.Uuid
+  id                String             @id @default(uuid()) @db.Uuid
   /// Display form, as the user typed it.
-  username         String
+  username          String
   /// Lower-cased username; makes sign-in and uniqueness case-insensitive.
-  usernameKey      String            @unique @map("username_key")
+  usernameKey       String             @unique @map("username_key")
   /// Stored lower-cased.
-  email            String            @unique
-  passwordHash     String            @map("password_hash")
+  email             String             @unique
+  passwordHash      String             @map("password_hash")
   /// Set on preview accounts, which are deleted at this time. Previews have no usable password.
   /// The column keeps its first name, from when previews were sample-data demos.
-  previewExpiresAt DateTime?         @map("demo_expires_at") @db.Timestamptz(3)
-  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt        DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
-  sessions         Session[]
-  canvas           CanvasConnection?
-  syncRuns         SyncRun[]
-  courses          Course[]
-  tasks            Task[]
-  files            CourseFile[]
-  sourceItems      SourceItem[]
-  changes          ChangeEvent[]
-  settings         UserSettings?
-  calendars        CalendarSource[]
-  events           CalendarEvent[]
-  syllabi          CourseSyllabus[]
+  previewExpiresAt  DateTime?          @map("demo_expires_at") @db.Timestamptz(3)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
+  sessions          Session[]
+  canvas            CanvasConnection?
+  syncRuns          SyncRun[]
+  courses           Course[]
+  tasks             Task[]
+  files             CourseFile[]
+  sourceItems       SourceItem[]
+  changes           ChangeEvent[]
+  settings          UserSettings?
+  calendars         CalendarSource[]
+  events            CalendarEvent[]
+  syllabi           CourseSyllabus[]
+  sources           SourceConnection[]
+  canvasCredentials CanvasCredential[]
+  providerSessions  ProviderSession[]
+  authChallenges    AuthChallenge[]
+  oauthStates       CanvasOAuthState[]
 
   @@index([previewExpiresAt])
   @@map("users")
@@ -78,23 +83,30 @@ enum ConnectionStatus {
   @@map("connection_status")
 }
 
-/// One Canvas account per user.
+/// One Canvas account per user: the account binding. Every credential slot (canvas_credentials) must
+/// sign in to this base URL and Canvas user id; a credential for another account is rejected.
 model CanvasConnection {
-  userId          String           @id @map("user_id") @db.Uuid
-  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String            @id @map("user_id") @db.Uuid
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   /// Origin only, for example https://canvas.illinois.edu.
-  baseUrl         String           @map("base_url")
-  /// Personal access token sealed with CREDENTIALS_KEY (AES-256-GCM, bound to user_id).
-  tokenCiphertext String           @map("token_ciphertext")
-  canvasUserId    String           @map("canvas_user_id")
-  displayName     String           @map("display_name")
-  status          ConnectionStatus @default(OK)
-  verifiedAt      DateTime         @map("verified_at") @db.Timestamptz(3)
+  baseUrl         String            @map("base_url")
+  /// Before credential slots: the personal access token sealed with AAD = user_id. It was copied to
+  /// canvas_credentials and is cleared here once the PAT slot is first used or changed.
+  tokenCiphertext String?           @map("token_ciphertext")
+  canvasUserId    String            @map("canvas_user_id")
+  displayName     String            @map("display_name")
+  /// TOKEN_REJECTED once no credential slot works any more.
+  status          ConnectionStatus  @default(OK)
+  verifiedAt      DateTime          @map("verified_at") @db.Timestamptz(3)
+  /// The method the user prefers (PAT or browser session); null keeps the default order.
+  preferredMethod CanvasAuthMethod? @map("preferred_method")
+  /// The last automatic switch to a backup slot: { from, to, reason_code, at }.
+  fallback        Json?
   /// A sync holds this lease while it runs, so one user never has two syncs at once.
-  syncLeaseUntil  DateTime?        @map("sync_lease_until") @db.Timestamptz(3)
-  lastSyncedAt    DateTime?        @map("last_synced_at") @db.Timestamptz(3)
-  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  syncLeaseUntil  DateTime?         @map("sync_lease_until") @db.Timestamptz(3)
+  lastSyncedAt    DateTime?         @map("last_synced_at") @db.Timestamptz(3)
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   @@index([lastSyncedAt])
   @@map("canvas_connections")
@@ -136,27 +148,28 @@ model SyncRun {
 }
 
 model Course {
-  id          Int             @id @default(autoincrement())
-  userId      String          @map("user_id") @db.Uuid
-  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  canvasId    String          @map("canvas_id")
-  courseCode  String          @map("course_code")
+  id          Int                @id @default(autoincrement())
+  userId      String             @map("user_id") @db.Uuid
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  canvasId    String             @map("canvas_id")
+  courseCode  String             @map("course_code")
   name        String
-  termName    String?         @map("term_name")
-  termStartAt DateTime?       @map("term_start_at") @db.Timestamptz(3)
-  termEndAt   DateTime?       @map("term_end_at") @db.Timestamptz(3)
-  htmlUrl     String          @map("html_url")
+  termName    String?            @map("term_name")
+  termStartAt DateTime?          @map("term_start_at") @db.Timestamptz(3)
+  termEndAt   DateTime?          @map("term_end_at") @db.Timestamptz(3)
+  htmlUrl     String             @map("html_url")
   /// Set when the user hides the course; sync keeps updating it.
-  archivedAt  DateTime?       @map("archived_at") @db.Timestamptz(3)
+  archivedAt  DateTime?          @map("archived_at") @db.Timestamptz(3)
   /// The last sync that saw this course among the user's active enrollments.
-  lastSeenAt  DateTime        @map("last_seen_at") @db.Timestamptz(3)
-  createdAt   DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt   DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  lastSeenAt  DateTime           @map("last_seen_at") @db.Timestamptz(3)
+  createdAt   DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime           @updatedAt @map("updated_at") @db.Timestamptz(3)
   tasks       Task[]
   files       CourseFile[]
   sourceItems SourceItem[]
   changes     ChangeEvent[]
   syllabus    CourseSyllabus?
+  sources     SourceConnection[]
 
   @@unique([userId, canvasId])
   @@index([userId, archivedAt])
@@ -369,4 +382,187 @@ model CourseSyllabus {
 
   @@index([userId])
   @@map("course_syllabi")
+}
+
+enum SourceType {
+  CANVAS
+  /// A course website (public or NTLM-protected).
+  WEBSITE
+  GRADESCOPE
+  PRAIRIELEARN
+
+  @@map("source_type")
+}
+
+enum SourceHealth {
+  /// Never synced.
+  UNKNOWN
+  HEALTHY
+  /// Some resources could not be read; the rest is up to date.
+  DEGRADED
+  AUTH_REQUIRED
+  ERROR
+
+  @@map("source_health")
+}
+
+/// Where a user's academic data comes from: their Canvas account, a course website, Gradescope or
+/// PrairieLearn. One row per (user, type, base URL); only one Canvas row per user.
+model SourceConnection {
+  id              String           @id @default(uuid()) @db.Uuid
+  userId          String           @map("user_id") @db.Uuid
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type            SourceType
+  name            String
+  /// Normalized http(s) URL without query or fragment; an origin for Canvas.
+  baseUrl         String           @map("base_url")
+  /// The course this source belongs to (course websites); null for account-level sources.
+  courseId        Int?             @map("course_id")
+  course          Course?          @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  /// Type-specific, secret-free settings (for example a website's authentication method).
+  config          Json             @default("{}")
+  /// READY, AUTH_REQUIRED, DISABLED, ERROR or PENDING; plain text so new source types can add states.
+  state           String           @default("READY")
+  /// Disabled sources are skipped by sync and keep their data.
+  enabled         Boolean          @default(true)
+  lastSyncAt      DateTime?        @map("last_sync_at") @db.Timestamptz(3)
+  lastSuccessAt   DateTime?        @map("last_success_at") @db.Timestamptz(3)
+  lastError       String?          @map("last_error")
+  health          SourceHealth     @default(UNKNOWN)
+  healthSummary   String?          @map("health_summary")
+  /// Resources the last sync could not read: [{ resource, course, code, http_status, optional }].
+  diagnostics     Json             @default("[]")
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  providerSession ProviderSession?
+
+  @@unique([userId, type, baseUrl])
+  @@index([userId])
+  @@map("source_connections")
+}
+
+enum CanvasAuthMethod {
+  PAT
+  BROWSER_SESSION
+  OAUTH
+
+  @@map("canvas_auth_method")
+}
+
+enum CredentialState {
+  MISSING
+  VALID
+  INVALID
+  EXPIRED
+  REVOKED
+
+  @@map("credential_state")
+}
+
+/// One Canvas credential slot per user and method. A removed slot keeps its row (state and failure
+/// reason) with the secret cleared; every install and removal bumps the generation, so a background
+/// check that started before a replacement can never clear the replacement.
+model CanvasCredential {
+  userId             String           @map("user_id") @db.Uuid
+  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  method             CanvasAuthMethod
+  /// Sealed with AAD "<user_id>:canvas:<method>": a PAT, a JSON cookie jar or JSON OAuth tokens.
+  secretCiphertext   String?          @map("secret_ciphertext")
+  /// Set on PATs copied from canvas_connections, which were sealed with AAD = user_id; re-sealed on first use.
+  legacyAad          Boolean          @default(false) @map("legacy_aad")
+  generation         Int              @default(0)
+  state              CredentialState  @default(MISSING)
+  verifiedAt         DateTime?        @map("verified_at") @db.Timestamptz(3)
+  lastSuccessAt      DateTime?        @map("last_success_at") @db.Timestamptz(3)
+  failedAt           DateTime?        @map("failed_at") @db.Timestamptz(3)
+  failureReason      String?          @map("failure_reason")
+  /// SHA-256 of "<base_url>|<canvas user id>" for the account this secret signed in as.
+  accountFingerprint String?          @map("account_fingerprint")
+  /// PAT expiry (user-entered, end of that day in their time zone) or OAuth access-token expiry.
+  expiresAt          DateTime?        @map("expires_at") @db.Timestamptz(3)
+  /// USER_ENTERED, CANVAS_API or UNKNOWN.
+  expirationSource   String?          @map("expiration_source")
+  /// The PAT expiry state last announced (warning, urgent, critical, expired), so each is sent once.
+  notifiedState      String?          @map("notified_state")
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@id([userId, method])
+  @@map("canvas_credentials")
+}
+
+/// The signed-in cookie jar of a Gradescope or PrairieLearn connection, captured by the Auth Broker.
+model ProviderSession {
+  connectionId     String           @id @map("connection_id") @db.Uuid
+  connection       SourceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  userId           String           @map("user_id") @db.Uuid
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// JSON { name: value } sealed with AAD "<user_id>:provider-session:<connection_id>".
+  cookieCiphertext String?          @map("cookie_ciphertext")
+  generation       Int              @default(0)
+  state            CredentialState  @default(MISSING)
+  verifiedAt       DateTime?        @map("verified_at") @db.Timestamptz(3)
+  failedAt         DateTime?        @map("failed_at") @db.Timestamptz(3)
+  failureReason    String?          @map("failure_reason")
+  updatedAt        DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([userId])
+  @@map("provider_sessions")
+}
+
+enum ChallengeState {
+  WAITING_FOR_USER
+  LOGIN_OPENED
+  AUTHENTICATED
+  FAILED
+  CANCELLED
+  TIMED_OUT
+
+  @@map("challenge_state")
+}
+
+/// A browser sign-in handed to the desktop Auth Broker. Only SHA-256 hashes of its three capabilities
+/// are stored: the ticket the page gives the broker, the page's control token and the broker's
+/// exchange token. The broker has no session; its requests reach the user only through this row.
+model AuthChallenge {
+  /// Random and URL-safe; the protocol's challenge_id.
+  id           String         @id
+  userId       String         @map("user_id") @db.Uuid
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// canvas, gradescope, prairielearn or all.
+  provider     String
+  /// login, clear or clear_all.
+  operation    String
+  /// What the broker signs in to: { base_url, credential_id, operation, generation(s) }.
+  target       Json
+  ticketHash   String         @map("ticket_hash")
+  controlHash  String         @map("control_hash")
+  exchangeHash String?        @map("exchange_hash")
+  state        ChallengeState @default(WAITING_FOR_USER)
+  claimed      Boolean        @default(false)
+  /// Set when the broker starts completing, so an exchange token works once.
+  finishing    Boolean        @default(false)
+  reason       String?
+  deadline     DateTime       @db.Timestamptz(3)
+  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([userId])
+  @@index([deadline])
+  @@map("auth_challenges")
+}
+
+/// A pending Canvas OAuth authorization: single use, short-lived, bound to the user and slot generation.
+model CanvasOAuthState {
+  /// SHA-256 of the state parameter; the parameter itself is never stored.
+  stateHash   String   @id @map("state_hash")
+  userId      String   @map("user_id") @db.Uuid
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  generation  Int
+  baseUrl     String   @map("base_url")
+  redirectUri String   @map("redirect_uri")
+  expiresAt   DateTime @map("expires_at") @db.Timestamptz(3)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("canvas_oauth_states")
 }

@@ -6,9 +6,13 @@ import { PREVIEW_UNAVAILABLE, PreviewBanner, UnavailableButton } from "./preview
 import { syncOutcome, timeAgo, type SyncOutcome } from "./format";
 import { AlertIcon, BellIcon, BookIcon, CalendarIcon, CheckIcon, FolderIcon, GearIcon, LogoMark, SunIcon, SyncIcon } from "./icons";
 import { useConnection, useIsPreview, useMe, useSync, useUnreadCount } from "./queries";
+import { SourcesButton, SourcesList } from "./sources/sidebar";
 import { TaskEditorProvider } from "./tasks";
 import { useToast } from "./toast";
 import { Alert, Spinner, useFocusHeading } from "./ui";
+
+/** Set on gateway deployments: the account page of the site that hosts CanvasWatcher. */
+const ACCOUNT_URL = ((import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_ACCOUNT_URL ?? "").trim();
 
 /** Re-renders every `intervalMs` so relative times ("5 minutes ago") stay true. */
 export function useNow(intervalMs = 60_000): Date {
@@ -244,9 +248,18 @@ export function AppShell() {
             </ul>
           </nav>
           <div className="sidebar-footer">
+            <SourcesList />
             <SyncControl />
             <p className="signed-in-as">
               Signed in as <strong>{me.data?.username}</strong>
+              {ACCOUNT_URL ? (
+                <>
+                  {" · "}
+                  <a href={ACCOUNT_URL} className="account-link">
+                    Account
+                  </a>
+                </>
+              ) : null}
             </p>
           </div>
         </aside>
@@ -257,6 +270,7 @@ export function AppShell() {
             <span>CanvasWatcher</span>
           </Link>
           <div className="topbar-actions">
+            <SourcesButton />
             <SyncControl compact />
             <NavLink to="/settings" className="icon-button topbar-settings" aria-label="Settings">
               <GearIcon />
@@ -270,14 +284,14 @@ export function AppShell() {
             <div className="banner">
               <Alert
                 tone="warning"
-                title="Canvas stopped accepting your access token"
+                title="Canvas authentication required"
                 action={
-                  <Link className="button small primary" to="/settings#canvas">
-                    Reconnect
+                  <Link className="button small primary" to="/settings#sources">
+                    Sign in again
                   </Link>
                 }
               >
-                Your courses are not updating. Create a new token in Canvas and reconnect.
+                Your courses are not updating. Sign in with the browser, or import a new token, in Settings → Sources.
               </Alert>
             </div>
           ) : null}

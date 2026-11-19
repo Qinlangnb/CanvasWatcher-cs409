@@ -8,7 +8,11 @@ import type { Config } from "./config.js";
 import type { Db } from "./db.js";
 import { errorHandler, notFound } from "./http/errors.js";
 import { calendarRouter, isIcsUpload } from "./routes/calendar.js";
+import { ChallengeStore, instanceId } from "./broker/challenges.js";
+import { BROKER_BOUNDARY_PATHS, brokerBoundaryRouter, brokerRouter } from "./routes/broker.js";
 import { canvasRouter } from "./routes/canvas.js";
+import { canvasAuthRouter, canvasOAuthCallback } from "./routes/canvasAuth.js";
+import { credentialStorage, sourcesRouter } from "./routes/sources.js";
 import { changesRouter } from "./routes/changes.js";
 import { coursesRouter } from "./routes/courses.js";
 import { aiRouter } from "./routes/ai.js";
@@ -35,8 +39,11 @@ export function createApp({ config, db, logger, services }: AppDependencies): Ex
   app.use(helmet());
   app.use(pinoHttp({ logger, redact: ["req.headers.cookie", "res.headers['set-cookie']"] }));
   const json = express.json({ limit: "100kb" });
-  // Calendar imports carry a whole .ics file; that route parses its own body, after sign-in is checked.
-  app.use((req, res, next) => (isIcsUpload(req.method, req.path) ? next() : json(req, res, next)));
+  // Calendar imports carry a whole .ics file and the Auth Broker hands over cookie jars; those routes
+  // parse their own bodies.
+  app.use((req, res, next) =>
+    isIcsUpload(req.method, req.path) || BROKER_BOUNDARY_PATHS.has(req.path) ? next() : json(req, res, next),
+  );
   app.use(cookieParser());
   app.use("/api", (_req, res, next) => {
     // Responses carry account data; never let a shared cache keep them.
@@ -53,7 +60,13 @@ export function createApp({ config, db, logger, services }: AppDependencies): Ex
     }
   });
 
+  const challenges = new ChallengeStore(db, instanceId(config.sessionSecret));
+  // The desktop Auth Broker has no session and no Origin; its three routes come before those guards.
+  app.use("/api/auth/broker", brokerBoundaryRouter(db, services, challenges));
+
   app.use("/api", originGuard(config), loadSession(db), csrfGuard(config));
+  // Canvas sends the browser back here; the OAuth state, not the session, says whose it is.
+  app.get("/api/auth/canvas/oauth/callback", canvasOAuthCallback(db, services));
   app.use("/api/users", usersRouter(db, config));
   app.use("/api/sessions", sessionsRouter(db, config));
   app.use("/api/preview", previewRouter(db, config));
@@ -66,6 +79,12 @@ export function createApp({ config, db, logger, services }: AppDependencies): Ex
   app.use("/api/changes", requireUser, changesRouter(db));
   app.use("/api/today", requireUser, todayRouter(db));
   app.use("/api/calendar", requireUser, calendarRouter(db));
+  app.use("/api/auth/canvas", requireUser, canvasAuthRouter(db, config, services));
+  app.use("/api/auth/broker", requireUser, brokerRouter(db, config, services, challenges));
+  app.use("/api/sources", requireUser, sourcesRouter(db, config, services));
+  app.get("/api/settings/credential-storage", requireUser, (_req, res) => {
+    res.json(credentialStorage());
+  });
   app.use("/api/settings", requireUser, settingsRouter(db));
   app.use("/api/ai", requireUser, aiRouter(db, services));
   app.use("/api", notFound);
