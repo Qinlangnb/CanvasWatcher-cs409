@@ -1,6 +1,6 @@
 {
   "name": "canvaswatcher-server",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "private": true,
   "description": "CanvasWatcher REST API (Node.js, Express, PostgreSQL)",
   "license": "GPL-2.0-only",

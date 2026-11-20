@@ -1,5 +1,15 @@
 # Changelog / 更新记录
 
+## v0.8.2 — course websites stop re-downloading every file / 课程网站不再每次重下所有文件
+
+### English
+
+- Course websites: stored files are no longer downloaded in full on every sync. A file the site serves with an ETag or Last-Modified is re-checked with a conditional request and kept as it is when the site answers 304 Not Modified; a file served without either is downloaded again at most every 6 hours. Pages are still read every sync to find new links. The first sync after upgrading downloads each file once more to record its validators.
+
+### 中文
+
+- 课程网站：已存储的文件不再每次同步都完整下载。服务器给出 ETag 或 Last-Modified 的文件改为条件请求，服务器回 304 Not Modified 时保留现有副本；两者都没有的文件最多每 6 小时重新下载一次。页面仍每次读取，以便发现新链接。升级后的第一次同步会再下载一次每个文件，用来记录这些校验信息。
+
 ## v0.8.1 — parity review fixes / 对照审查修复
 
 ### English

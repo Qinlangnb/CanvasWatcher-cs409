@@ -34,6 +34,8 @@ const MAX_BLOCK_CHARS = 200_000;
 const MAX_PENDING_SEEDS = 200;
 /** A file too large to store is fetched again only after this long (or once it leaves the site). */
 export const OVERSIZED_RECHECK_MS = 7 * 24 * 60 * 60_000;
+/** A stored file whose server sends neither ETag nor Last-Modified is downloaded again at most this often. */
+export const UNVALIDATED_RECHECK_MS = 6 * 60 * 60_000;
 /** pending_resources.state of such a file: not retried as a seed, not listed as pending. */
 const TOO_LARGE = "TOO_LARGE";
 /** Unlinked bytes younger than this may belong to a sync still running; they are pruned later. */
@@ -373,6 +375,19 @@ export async function syncWebsite(connection: SourceConnection, context: SourceC
     where: { sourceId: connection.id, state: TOO_LARGE, lastAttemptAt: { gt: new Date(Date.now() - OVERSIZED_RECHECK_MS) } },
     select: { url: true },
   });
+  // Stored files are not downloaded in full on every sync: with an ETag or Last-Modified they are asked
+  // for conditionally (304 = unchanged), without either they wait UNVALIDATED_RECHECK_MS.
+  const storedFiles = await db.courseFile.findMany({
+    where: { sourceId: connection.id, removedAt: null, integrityStatus: "VALID", blobId: { not: null }, sourceUrl: { not: null } },
+    select: { sourceUrl: true, sourceEtag: true, sourceLastModified: true, sourceFetchedAt: true },
+  });
+  const knownFiles = new Map<string, { etag: string | null; lastModified: string | null }>();
+  const recentlyFetched: string[] = [];
+  for (const row of storedFiles) {
+    if (!row.sourceUrl) continue;
+    if (row.sourceEtag || row.sourceLastModified) knownFiles.set(row.sourceUrl, { etag: row.sourceEtag, lastModified: row.sourceLastModified });
+    else if (row.sourceFetchedAt && row.sourceFetchedAt.getTime() > Date.now() - UNVALIDATED_RECHECK_MS) recentlyFetched.push(row.sourceUrl);
+  }
   const fetcher = new ResourceFetcher({
     transport: services.sourceTransport,
     credentials: (id) => (id === connection.id ? credential : null),
@@ -387,7 +402,8 @@ export async function syncWebsite(connection: SourceConnection, context: SourceC
         authRules: scope ? [{ pathPrefix: scope, credentialId: connection.id }] : [],
         pathLimit: config.discovery_path_limit,
         retryUrls: pendingRows.map((row) => row.url),
-        skipUrls: recentlyTooLarge.map((row) => row.url),
+        skipUrls: [...recentlyTooLarge.map((row) => row.url), ...recentlyFetched],
+        knownFiles,
       },
       fetcher,
     );
@@ -400,7 +416,7 @@ export async function syncWebsite(connection: SourceConnection, context: SourceC
   const itemScope: ItemScope = { userId, courseId: course.id, sourceId: connection.id, baseline, now };
   const complete = crawl.health === "HEALTHY";
   const pendingUrls = new Set(crawl.pending.map((row) => row.url));
-  // Files over the size limit, found now or skipped as known: listed, never stored, never "removed".
+  // Files over the size limit, and files skipped as known (too large or unchanged): never "removed".
   const oversized = crawl.files.filter((file) => file.integrity.status === "TOO_LARGE");
   const oversizedUrls = new Set([...oversized.map((file) => file.url), ...crawl.skipped]);
   const zone = (await getSettings(db, userId)).timeZone;
@@ -467,6 +483,9 @@ export async function syncWebsite(connection: SourceConnection, context: SourceC
           integrityStatus: file.integrity.status,
           validationError: file.integrity.reason,
           blobId: blobIds.get(file.url) ?? (previousFile?.sha256 === file.sha256 ? previousFile.blobId : null),
+          sourceEtag: file.etag,
+          sourceLastModified: file.lastModified,
+          sourceFetchedAt: now,
           removedAt: null,
         };
         await tx.courseFile.upsert({

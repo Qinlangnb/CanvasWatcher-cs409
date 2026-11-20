@@ -319,6 +319,11 @@ model CourseFile {
   validationError  String?           @map("validation_error")
   blobId           Int?              @map("blob_id")
   blob             WebsiteBlob?      @relation(fields: [blobId], references: [id], onDelete: SetNull)
+  /// ETag and Last-Modified the website sent with the stored bytes, for conditional re-checks.
+  sourceEtag         String?   @map("source_etag")
+  sourceLastModified String?   @map("source_last_modified")
+  /// When the bytes were last downloaded; files without validators wait a few hours between downloads.
+  sourceFetchedAt    DateTime? @map("source_fetched_at") @db.Timestamptz(3)
 
   @@unique([courseId, canvasId])
   @@index([userId, courseId])

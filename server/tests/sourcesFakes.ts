@@ -16,11 +16,13 @@ export interface FakeRequest {
   url: string;
   connection: number;
   authorization: string | undefined;
+  /** Every header the client sent, e.g. If-None-Match. */
+  headers: Record<string, string>;
 }
 
 export interface FakeSiteOptions {
   /** Anonymous replies by URL; unknown URLs are 404. */
-  pages?: Record<string, FakeReply | ((url: string) => FakeReply)>;
+  pages?: Record<string, FakeReply | ((url: string, headers: Record<string, string>) => FakeReply)>;
   /** URLs behind Windows authentication. */
   protectedUrl?: (url: string) => boolean;
   /** What the server sends on an anonymous request to a protected URL. */
@@ -28,7 +30,7 @@ export interface FakeSiteOptions {
   /** Accepted credential (domain is part of the username, `DOMAIN\user`). */
   account?: { username: string; password: string };
   /** Reply after a successful handshake. */
-  protectedReply?: (url: string) => FakeReply;
+  protectedReply?: (url: string, headers: Record<string, string>) => FakeReply;
   delayMs?: number;
 }
 
@@ -79,13 +81,13 @@ export function fakeSite(options: FakeSiteOptions) {
         async get(url: string, headers: Record<string, string>, limits: RequestLimits): Promise<RawResponse> {
           if (closed) throw new TransportError("network_error");
           const authorization = headers.Authorization;
-          requests.push({ url, connection: id, authorization });
+          requests.push({ url, connection: id, authorization, headers });
           const counted = authorization !== undefined;
           if (counted) authorizedInFlight++;
           maxAuthorizedInFlight = Math.max(maxAuthorizedInFlight, authorizedInFlight);
           try {
             if (options.delayMs) await new Promise((resolve) => setTimeout(resolve, options.delayMs));
-            const reply = handle(url, authorization);
+            const reply = handle(url, authorization, headers);
             const body = Buffer.isBuffer(reply.body) ? reply.body : Buffer.from(reply.body ?? "");
             if (body.length > limits.maxBytes) {
               // Like the real transport: the status line and headers arrived, the body was cut off.
@@ -101,10 +103,10 @@ export function fakeSite(options: FakeSiteOptions) {
         },
       };
 
-      function handle(url: string, authorization: string | undefined): FakeReply {
+      function handle(url: string, authorization: string | undefined, headers: Record<string, string>): FakeReply {
         if (!options.protectedUrl?.(url)) {
           const page = options.pages?.[url];
-          return typeof page === "function" ? page(url) : page ?? { status: 404 };
+          return typeof page === "function" ? page(url, headers) : page ?? { status: 404 };
         }
         const unauthorized: FakeReply = { status: 401, headers: { "www-authenticate": options.challengeHeader ?? "NTLM" } };
         const match = /^(NTLM|Negotiate) (.+)$/.exec(authorization ?? "");
@@ -118,7 +120,7 @@ export function fakeSite(options: FakeSiteOptions) {
         // The Type 3 must arrive on the connection that received the challenge.
         if (type !== 3 || !serverChallenge || !verifyType3(message, serverChallenge, options.account)) return unauthorized;
         serverChallenge = null;
-        return options.protectedReply?.(url) ?? { status: 200, headers: { "content-type": "text/html" }, body: "protected" };
+        return options.protectedReply?.(url, headers) ?? { status: 200, headers: { "content-type": "text/html" }, body: "protected" };
       }
     },
   };

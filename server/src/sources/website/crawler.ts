@@ -15,7 +15,10 @@ const HTML_EXTENSIONS = new Set(["", ".html", ".htm", ".asp", ".aspx"]);
 
 /** What the crawler needs from a fetcher; `ResourceFetcher` satisfies it. */
 export interface PageFetcher {
-  fetch(url: string, rule: AuthRule | null, options?: { redirectAllowed?: (url: string) => boolean }): Promise<FetchResult>;
+  fetch(url: string, rule: AuthRule | null, options?: {
+    redirectAllowed?: (url: string) => boolean;
+    validators?: { etag?: string | null; lastModified?: string | null };
+  }): Promise<FetchResult>;
 }
 
 export interface CrawlConfig {
@@ -46,6 +49,11 @@ export interface CrawlConfig {
    * big lecture recording isn't fetched up to the limit on every sync. They come back in `skipped`.
    */
   skipUrls?: Iterable<string>;
+  /**
+   * ETag / Last-Modified of files stored on an earlier sync. They are requested conditionally; one that
+   * answers 304 is not downloaded again and comes back in `skipped`, keeping the stored copy.
+   */
+  knownFiles?: ReadonlyMap<string, { etag: string | null; lastModified: string | null }>;
 }
 
 export interface CrawledPage {
@@ -96,7 +104,7 @@ export interface CrawlResult {
   pages: CrawledPage[];
   files: CrawledFile[];
   pending: PendingResource[];
-  /** `skipUrls` found again this crawl: still on the site, not downloaded. */
+  /** `skipUrls` found again and known files that answered 304: still on the site, not downloaded. */
   skipped: string[];
   /** Sorted error codes for the source's last_error (`discovery_limit_reached` when truncated). */
   errors: string[];
@@ -257,7 +265,13 @@ export class WebsiteCrawler {
         continue;
       }
       const rule = this.authRuleFor(url);
-      const result = await this.fetcher.fetch(url, rule, { redirectAllowed });
+      const validators = this.config.knownFiles?.get(url);
+      const result = await this.fetcher.fetch(url, rule, validators ? { redirectAllowed, validators } : { redirectAllowed });
+      // Unchanged since the stored copy: nothing was downloaded and the stored file stays as it is.
+      if (validators && result.status === "not_modified") {
+        skipped.push(url);
+        continue;
+      }
       // Over the size limit: a file is listed without its bytes; an oversized page stays pending.
       if (result.status === "ok" && result.tooLarge && (this.isFileUrl(url) || result.contentType !== "text/html")) {
         files.push(this.oversized(url, title, result, rule));

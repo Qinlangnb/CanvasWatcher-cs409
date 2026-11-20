@@ -114,6 +114,36 @@ describe("website crawler", () => {
     expect(site.requests.some((request) => request.url.includes("evil"))).toBe(false);
   });
 
+  it("asks for a stored file conditionally and keeps it when the site answers 304", async () => {
+    const lecture = BASE + "secure/lecture-01.pdf";
+    const site = fakeSite({
+      account: ACCOUNT,
+      protectedUrl: (url) => url.includes("/secure/"),
+      protectedReply: (_url, headers) =>
+        headers["If-None-Match"] === '"v1"' ? { status: 304, headers: { etag: '"v1"' } } : { ...pdf, headers: { ...pdf.headers, etag: '"v2"' } },
+      pages: { [BASE]: html('<a href="secure/lecture-01.pdf">Lecture 1</a> <a href="secure/lecture-02.pdf">Lecture 2</a>') },
+    });
+    const fetcher = new ResourceFetcher({ transport: site.transport, credentials: () => ACCOUNT });
+    const result = await crawlWebsite(
+      {
+        name: "Test site",
+        baseUrl: BASE,
+        authRules: [{ pathPrefix: "/test101/fa26/secure/", credentialId: "site" }],
+        knownFiles: new Map([[lecture, { etag: '"v1"', lastModified: null }]]),
+      },
+      fetcher,
+    );
+    expect(result.skipped).toEqual([lecture]);
+    expect(result.files.map((file) => file.url)).toEqual([BASE + "secure/lecture-02.pdf"]);
+    expect(result.files[0]?.etag).toBe('"v2"');
+    expect(result.health).toBe("HEALTHY");
+    // The anonymous try and both NTLM legs all carried the validator; an unknown file carried none.
+    const asked = site.requests.filter((request) => request.url === lecture);
+    expect(asked.length).toBe(3);
+    expect(asked.every((request) => request.headers["If-None-Match"] === '"v1"')).toBe(true);
+    expect(site.requests.filter((request) => request.url.endsWith("lecture-02.pdf")).some((request) => "If-None-Match" in request.headers)).toBe(false);
+  });
+
   it("follows the redirect of a slashless seed and resolves links against the final URL", async () => {
     const site = schedulePages(() => false);
     const result = await crawlWebsite(

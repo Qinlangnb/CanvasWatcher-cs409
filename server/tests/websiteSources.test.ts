@@ -269,6 +269,52 @@ describe("course websites", () => {
     }
   });
 
+  it("re-checks stored files with their ETag and waits hours before downloading one without validators", async () => {
+    const ada = await signUp();
+    const tagged = `${BASE}/secure/hw-02.pdf`;
+    const plain = `${BASE}/secure/lecture-01.pdf`;
+    pages[`${BASE}/`] = html(`${fixture("public_schedule.html")}<a href="secure/hw-02.pdf">HW 2</a>`);
+    let version = '"v1"';
+    const downloads = new Map<string, number>();
+    const downloaded = (url: string) => downloads.get(url) ?? 0;
+    site = fakeSite({
+      account: ACCOUNT,
+      protectedUrl: (url) => url.includes("/secure/"),
+      protectedReply: (url, headers) => {
+        if (url === tagged && headers["If-None-Match"] === version) return { status: 304, headers: { etag: version } };
+        if (!url.endsWith(".pdf")) return html(fixture("protected_office_hours.html"));
+        downloads.set(url, downloaded(url) + 1);
+        return url === tagged ? { ...pdf, headers: { ...pdf.headers, etag: version } } : pdf;
+      },
+      pages,
+    });
+    services.sourceTransport = site.transport;
+    const { source } = await addWebsite(ada);
+    downloads.clear();
+
+    await sync(ada, source.id);
+    expect([downloaded(tagged), downloaded(plain)]).toEqual([1, 1]);
+    expect((await db.courseFile.findFirst({ where: { sourceUrl: tagged } }))?.sourceEtag).toBe('"v1"');
+
+    // Unchanged: the tagged file answers 304, the other one isn't asked for; both stay listed and stored.
+    const second = await sync(ada, source.id);
+    expect(second).toMatchObject({ state: "READY", errors: [] });
+    expect([downloaded(tagged), downloaded(plain)]).toEqual([1, 1]);
+    expect(site.requests.some((request) => request.url === tagged && request.headers["If-None-Match"] === '"v1"')).toBe(true);
+    const files = (await ada.send("get", "/api/files")).body.items as { id: number; name: string; integrity_status: string }[];
+    expect(files.map((file) => [file.name, file.integrity_status]).sort()).toEqual([["hw-02.pdf", "VALID"], ["lecture-01.pdf", "VALID"]]);
+    expect((await ada.send("get", `/api/files/${files[0]?.id}/download`)).status).toBe(200);
+    expect((await ada.send("get", "/api/sources")).body[0].health).toBe("HEALTHY");
+    expect(await db.changeEvent.count({ where: { userFacing: true } })).toBe(0);
+
+    // A new version is downloaded; a file without validators is downloaded again once it is old enough.
+    version = '"v2"';
+    await db.courseFile.updateMany({ where: { sourceUrl: plain }, data: { sourceFetchedAt: new Date(Date.now() - 7 * 3_600_000) } });
+    await sync(ada, source.id);
+    expect([downloaded(tagged), downloaded(plain)]).toEqual([2, 2]);
+    expect((await db.courseFile.findFirst({ where: { sourceUrl: tagged } }))?.sourceEtag).toBe('"v2"');
+  });
+
   it("keeps protected URLs pending, asks to sign in again, and retries them after re-authentication", async () => {
     const ada = await signUp();
     const { source } = await addWebsite(ada);

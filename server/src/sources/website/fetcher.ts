@@ -51,9 +51,20 @@ export interface FetchOptions {
   /** Which redirect targets may be followed anonymously; default: same origin as the request. */
   redirectAllowed?: (url: string) => boolean;
   limits?: Partial<RequestLimits>;
+  /** Validators of the stored copy, sent as If-None-Match / If-Modified-Since: an unchanged file answers 304. */
+  validators?: { etag?: string | null; lastModified?: string | null };
 }
 
 const MAX_REDIRECTS = 5;
+
+/** Conditional request headers; a value that isn't a plain header string is left out. */
+function conditionalHeaders(validators: FetchOptions["validators"]): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const plain = (value: string | null | undefined): value is string => !!value && /^[\x20-\x7e]{1,512}$/.test(value);
+  if (plain(validators?.etag)) headers["If-None-Match"] = validators.etag;
+  if (plain(validators?.lastModified)) headers["If-Modified-Since"] = validators.lastModified;
+  return headers;
+}
 
 function failure(url: string, error: string, extra: Partial<FetchResult> = {}): FetchResult {
   return {
@@ -133,14 +144,15 @@ export async function ntlmExchange(
   scheme: AuthScheme,
   credential: NtlmCredential,
   limits: RequestLimits,
+  extraHeaders: Record<string, string> = {},
 ): Promise<FetchResult> {
-  const first = await connection.get(url, { Authorization: `${scheme} ${negotiateMessage().toString("base64")}` }, limits);
+  const first = await connection.get(url, { ...extraHeaders, Authorization: `${scheme} ${negotiateMessage().toString("base64")}` }, limits);
   if (first.status !== 401) return statusResult(first, true);
   const token = challengeToken(first.headers["www-authenticate"], scheme);
   if (!token) return { ...statusResult(first, true), error: "ntlm_challenge_missing" };
   const challenge = parseChallengeMessage(token);
   const answer = authenticateMessage(challenge, credential).toString("base64");
-  return statusResult(await connection.get(url, { Authorization: `${scheme} ${answer}` }, limits), true);
+  return statusResult(await connection.get(url, { ...extraHeaders, Authorization: `${scheme} ${answer}` }, limits), true);
 }
 
 interface PooledConnection {
@@ -181,11 +193,12 @@ export class ResourceFetcher {
   async fetchAnonymous(url: string, options: FetchOptions = {}): Promise<FetchResult> {
     const limits = { ...this.limits, ...options.limits };
     const allowed = options.redirectAllowed ?? ((next: string) => sameOrigin(next, url));
+    const conditional = conditionalHeaders(options.validators);
     let current = url;
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       let response: RawResponse;
       try {
-        response = await this.anonymous.get(current, {}, limits);
+        response = await this.anonymous.get(current, conditional, limits);
       } catch (error) {
         if (error instanceof TransportError) return oversizedResult(error, limits, false) ?? failure(current, error.code);
         return failure(current, "http_client_error");
@@ -220,10 +233,14 @@ export class ResourceFetcher {
     if (!credential) {
       return failure(url, "credential_not_loaded", { status: "auth_required", authScheme: publicResult.authScheme });
     }
-    return this.authenticated(publicResult.url, rule.credentialId, credential, publicResult.authScheme, {
-      ...this.limits,
-      ...options.limits,
-    });
+    return this.authenticated(
+      publicResult.url,
+      rule.credentialId,
+      credential,
+      publicResult.authScheme,
+      { ...this.limits, ...options.limits },
+      conditionalHeaders(options.validators),
+    );
   }
 
   private authenticated(
@@ -232,6 +249,7 @@ export class ResourceFetcher {
     credential: NtlmCredential,
     scheme: AuthScheme,
     limits: RequestLimits,
+    extraHeaders: Record<string, string> = {},
   ): Promise<FetchResult> {
     let pooled = this.pool.get(credentialId);
     if (!pooled || pooled.credential !== credential) {
@@ -244,7 +262,7 @@ export class ResourceFetcher {
     const run = entry.queue.then(() =>
       this.ntlmLimit.run(async () => {
         try {
-          return await ntlmExchange(entry.connection, url, scheme, credential, limits);
+          return await ntlmExchange(entry.connection, url, scheme, credential, limits, extraHeaders);
         } catch (error) {
           // A broken handshake leaves the socket in an unknown auth state; start over next time.
           if (this.pool.get(credentialId) === entry) this.invalidate(credentialId);
