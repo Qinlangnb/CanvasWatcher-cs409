@@ -26,6 +26,8 @@ class HealthTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()['backend_ready'])
         self.assertEqual(response.json()['protocol_version'], 1)
+        # The page compares this with its own address to spot a broker set up for another site.
+        self.assertEqual(response.json()['backend'], 'http://127.0.0.1:8000')
 
     async def test_callback_missing(self):
         def handler(request):

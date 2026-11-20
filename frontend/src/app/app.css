@@ -5628,3 +5628,25 @@ body:has(.tabbar) .toast-region {
   border-bottom-color: var(--accent);
   color: var(--accent);
 }
+
+/* The commands that register the Auth Broker for this site; long lines scroll, never widen the page. */
+.broker-reinstall {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.broker-command {
+  margin: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre;
+  user-select: all;
+}

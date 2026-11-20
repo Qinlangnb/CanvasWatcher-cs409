@@ -1,9 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { brokerRequest } from "../api";
+import { ApiError, brokerRequest } from "../api";
+import { PUBLIC_BASE_PATH } from "../../publicPath";
 import { UnavailableButton } from "../preview";
 import { Badge, Dialog, Spinner } from "../ui";
-import { brokerMessage, brokerReady, SOURCE_TYPE_LABELS, TERMINAL_STATES, type BrokerTicket, type SourceType } from "./model";
+import {
+  brokerInstallCommand,
+  brokerMessage,
+  brokerReady,
+  brokerSite,
+  SOURCE_TYPE_LABELS,
+  TERMINAL_STATES,
+  type BrokerTicket,
+  type SourceType,
+} from "./model";
 import { brokerApi, invalidateSources, useBrokerConfig, useBrokerHealth, useSourcesLocked } from "./queries";
 
 /** The launcher the installer registers (auth-broker/README.md). */
@@ -17,12 +27,15 @@ export function useBroker() {
   const config = useBrokerConfig();
   const url = config.data?.broker_url;
   const health = useBrokerHealth(url);
-  return { url, health, ready: !health.isError && brokerReady(health.data) };
+  const running = !health.isError && brokerReady(health.data);
+  const site = running ? brokerSite(health.data, window.location, PUBLIC_BASE_PATH) : "unknown";
+  // A broker registered for another site would take the ticket and then fail to claim it.
+  return { url, health, running, site, ready: running && site !== "other" };
 }
 
 /** Settings → Sources: whether the desktop broker runs, with Start and Check. */
 export function AuthBrokerPanel() {
-  const { url, health, ready } = useBroker();
+  const { url, health, ready, running, site } = useBroker();
   const locked = useSourcesLocked();
   const [launching, setLaunching] = useState(false);
   const [message, setMessage] = useState<{ text: string; alert?: boolean } | null>(null);
@@ -62,15 +75,23 @@ export function AuthBrokerPanel() {
     <section className="broker-panel" aria-labelledby="broker-heading">
       <div className="broker-panel-head">
         <h3 id="broker-heading">
-          Local Auth Broker · <span className={ready ? "broker-running" : "broker-stopped"}>{ready ? "Running" : "Not running"}</span>
+          Local Auth Broker · <span className={ready ? "broker-running" : "broker-stopped"}>{ready ? "Running" : running ? "Set up for another site" : "Not running"}</span>
         </h3>
         <span className={`status-dot ${ready ? "ok" : "warn"}`} aria-hidden="true" />
       </div>
       {ready ? (
         <p className="muted">Browser sign-in is available. Passwords and MFA stay on the official sign-in pages.</p>
+      ) : running ? (
+        <p className="muted">
+          The broker on this computer hands sessions to {health.data?.backend ?? "another site"}, not to this site, so sign-in here would fail.
+        </p>
       ) : (
-        <p className="muted">Browser-based sign-in is unavailable. The broker must run on this computer, outside Docker.</p>
+        <p className="muted">
+          Browser-based sign-in is unavailable. The broker must run on this computer, outside Docker. If it is running, it may not be
+          registered for this site.
+        </p>
       )}
+      {running && site !== "this" ? <BrokerReinstall outdated={site === "unknown"} version={health.data?.version} /> : null}
       {message ? (
         <p className={message.alert ? "form-error" : "inline-note"} role={message.alert ? "alert" : "status"}>
           {message.text}
@@ -192,9 +213,11 @@ export function BrowserSignIn({
       });
       setMessage(kind === "login" ? "Complete sign-in in the browser window. CanvasWatcher never receives your password." : "Clearing dedicated browser sessions…");
       poll(created);
-    } catch {
+    } catch (error) {
       await cancel(true);
-      setMessage("Browser sign-in could not start. Check the Local Auth Broker and retry.");
+      // The broker's own codes say why it refused (another site, busy, too old); the rest is generic.
+      const code = error instanceof ApiError && error.code !== "AUTH_BROKER_ERROR" ? error.code : null;
+      setMessage(code ? brokerMessage(code) : "Browser sign-in could not start. Check the Local Auth Broker and retry.");
     }
   };
 
@@ -254,6 +277,26 @@ export function BrowserSignIn({
       >
         <p>{confirmText}</p>
       </Dialog>
+    </div>
+  );
+}
+
+/**
+ * How to point the broker at this site: stop it, then register it again with this site's address. Shown
+ * when the broker serves another site, or is too old (before 0.8.0) to say which site it serves.
+ */
+function BrokerReinstall({ outdated, version }: { outdated: boolean; version?: string }) {
+  const command = brokerInstallCommand(window.location, PUBLIC_BASE_PATH);
+  return (
+    <div className="broker-reinstall">
+      <p className="inline-note">
+        {outdated
+          ? `This broker${version ? ` (version ${version})` : ""} is older than 0.8.0 and can't tell which site it serves. If sign-in fails, update it from auth-broker/ in this release and register it for this site:`
+          : "Register it for this site with the broker's Python (the one in its .venv):"}
+      </p>
+      <pre className="broker-command">
+        <code>{command}</code>
+      </pre>
     </div>
   );
 }

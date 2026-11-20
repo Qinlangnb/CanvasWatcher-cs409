@@ -187,3 +187,21 @@ test("sources styles cover narrow and wide screens, and dark mode through tokens
   const block = css.slice(css.indexOf("/* --- Sources:"));
   assert.doesNotMatch(block, /#[0-9a-f]{3,6}\b/i, "colours come from the themed tokens");
 });
+
+test("a broker registered for another site is told apart from one for this site", () => {
+  const hosted = { origin: "https://example.com", hostname: "example.com" };
+  const health = (backend) => ({ protocol_version: 1, backend_ready: true, version: "0.8.0", backend });
+  assert.equal(model.brokerSite(health("https://example.com/canvaswatcher"), hosted, "/canvaswatcher"), "this");
+  assert.equal(model.brokerSite(health("https://example.com/canvaswatcher/"), hosted, "/canvaswatcher"), "this");
+  assert.equal(model.brokerSite(health("https://example.com/old-site"), hosted, "/canvaswatcher"), "other");
+  assert.equal(model.brokerSite(health("http://127.0.0.1:8000"), hosted, "/canvaswatcher"), "other");
+  // Local installs reach the API port directly.
+  assert.equal(model.brokerSite(health("http://127.0.0.1:8000"), { origin: "http://localhost:8080", hostname: "localhost" }, ""), "this");
+  // Brokers before 0.8.0 don't report their backend.
+  assert.equal(model.brokerSite({ protocol_version: 1, backend_ready: true, version: "0.7.0" }, hosted, "/canvaswatcher"), "unknown");
+  assert.match(model.brokerInstallCommand(hosted, "/canvaswatcher"), /stop\n.*install --backend https:\/\/example\.com\/canvaswatcher --origin https:\/\/example\.com$/);
+  assert.match(model.brokerMessage("AUTH_CHALLENGE_INVALID"), /different CanvasWatcher site/);
+  // Only a broker for this site enables sign-in; the panel says when it serves another one.
+  assert.match(broker, /ready: running && site !== "other"/);
+  assert.match(broker, /Set up for another site/);
+});

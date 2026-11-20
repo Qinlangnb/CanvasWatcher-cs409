@@ -96,7 +96,9 @@ def create_app(config: Config | None = None, *, login=None, transport=None):
                 ready = response.status_code == 200 and response.json().get("status") == "ok"
         except (httpx.HTTPError, ValueError, AttributeError):
             pass
-        return {"state": "BROKER_AVAILABLE", "protocol_version": 1, "version": "0.8.0", "backend_ready": ready}
+        # "backend" lets the page notice a broker registered for a different CanvasWatcher site.
+        return {"state": "BROKER_AVAILABLE", "protocol_version": 1, "version": "0.8.0", "backend_ready": ready,
+                "backend": config.backend_origin}
 
     async def backend(path: str, body: dict):
         async with httpx.AsyncClient(transport=gateway_transport(), trust_env=False, timeout=35,

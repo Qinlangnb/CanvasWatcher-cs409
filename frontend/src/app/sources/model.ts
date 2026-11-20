@@ -90,6 +90,38 @@ export interface BrokerHealth {
   protocol_version?: number;
   version?: string;
   backend_ready?: boolean;
+  /** The CanvasWatcher address the broker hands sessions to (broker 0.8.0 and later). */
+  backend?: string;
+}
+
+/**
+ * Whether the broker serves this site. A broker hands sessions only to the one backend it was
+ * registered for, so a broker set up for another site would accept the ticket and then fail to claim
+ * it. Local installs talk to the API port directly, so a loopback backend matches a loopback page.
+ * Brokers before 0.8.0 don't say which site they serve: "unknown".
+ */
+export type BrokerSite = "this" | "other" | "unknown";
+
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+
+export function brokerSite(health: BrokerHealth | null | undefined, page: { origin: string; hostname: string }, basePath: string): BrokerSite {
+  const backend = health?.backend?.replace(/\/+$/, "");
+  if (!backend) return "unknown";
+  try {
+    const url = new URL(backend);
+    if (url.protocol === "http:" && LOOPBACK.has(url.hostname)) return LOOPBACK.has(page.hostname) ? "this" : "other";
+  } catch {
+    return "unknown";
+  }
+  return backend === `${page.origin}${basePath}` ? "this" : "other";
+}
+
+/** The commands that re-register the broker for this site (auth-broker/README.md). */
+export function brokerInstallCommand(page: { origin: string; hostname: string }, basePath: string): string {
+  const install = LOOPBACK.has(page.hostname)
+    ? "python -m academic_watcher_auth_broker.install_launcher install"
+    : `python -m academic_watcher_auth_broker.install_launcher install --backend ${page.origin}${basePath} --origin ${page.origin}`;
+  return `python -m academic_watcher_auth_broker.install_launcher stop\n${install}`;
 }
 
 export const METHOD_LABELS: Record<CanvasMethod, string> = { oauth: "OAuth", pat: "PAT", browser_session: "Browser Session" };
@@ -124,6 +156,14 @@ export function brokerMessage(reason: string | null | undefined): string {
       return "That browser signed in to a different Canvas account. Sign in with the account already connected here.";
     case "AUTH_BROKER_UNAVAILABLE":
       return "The Local Auth Broker is not running. Use Start broker, then retry.";
+    case "AUTH_CHALLENGE_INVALID":
+      return "The Local Auth Broker could not take over this sign-in. It is probably registered for a different CanvasWatcher site or is outdated: register it for this site (see the Local Auth Broker panel), then retry.";
+    case "AUTH_BROKER_BUSY":
+      return "The Local Auth Broker already has a sign-in window open. Finish or close it, then retry.";
+    case "AUTH_BROKER_VERSION_UNSUPPORTED":
+      return "The Local Auth Broker is too old for this site. Update it from auth-broker/ and register it again.";
+    case "AUTH_ORIGIN_DENIED":
+      return "The Local Auth Broker does not accept requests from this site. Register it again with this site's address.";
     case "AUTH_LOGIN_FAILED":
       return "Sign-in did not finish. Make sure you reached your dashboard, then retry.";
     default:
