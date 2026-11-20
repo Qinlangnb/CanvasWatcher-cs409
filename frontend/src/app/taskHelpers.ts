@@ -68,3 +68,75 @@ export function connectionMessage(failures: number, warned: boolean): "lost" | "
   if (failures === 0 && warned) return "restored";
   return null;
 }
+
+export interface ProgressSaveResult {
+  applied: boolean;
+  /** The task's revision after this request, applied or not. */
+  state_revision: number;
+  /** The saved progress after this request. */
+  progress: number;
+}
+
+/**
+ * One progress control's saves, one request at a time. Each request carries the revision the last
+ * answer returned (the earlier TodayView's revision ref), so quick successive commits (a held arrow
+ * key, keyup then blur) don't refuse each other; a value changed while a save runs is saved right
+ * after it. Only a refused save (`applied: false`) is a real conflict: the control then takes the
+ * saved value. A failed request stops the run; the next commit tries again.
+ */
+export function progressSaver(options: {
+  progress: number;
+  revision: number;
+  send: (progress: number, expectedRevision: number) => Promise<ProgressSaveResult>;
+  onResult?: (result: ProgressSaveResult, target: number) => void;
+  onError?: (error: unknown, target: number) => void;
+}) {
+  let saved = { progress: options.progress, revision: options.revision };
+  let latest = options.progress;
+  let busy = false;
+  let current: Promise<void> = Promise.resolve();
+  const run = async () => {
+    busy = true;
+    try {
+      while (latest !== saved.progress) {
+        const target = latest;
+        let result: ProgressSaveResult;
+        try {
+          result = await options.send(target, saved.revision);
+        } catch (error) {
+          options.onError?.(error, target);
+          return;
+        }
+        if (result.state_revision >= saved.revision) saved = { progress: result.progress, revision: result.state_revision };
+        options.onResult?.(result, target);
+        if (!result.applied) {
+          latest = saved.progress;
+          return;
+        }
+      }
+    } finally {
+      busy = false;
+    }
+  };
+  return {
+    /** Saves `value` after any save already running. */
+    commit(value: number): Promise<void> {
+      latest = value;
+      if (!busy) current = run();
+      return current;
+    },
+    /** The task as last fetched; a fetch older than the last answer is ignored (returns false). */
+    sync(progress: number, revision: number): boolean {
+      if (revision < saved.revision) return false;
+      saved = { progress, revision };
+      if (!busy) latest = progress;
+      return true;
+    },
+    get busy() {
+      return busy;
+    },
+    get saved() {
+      return saved;
+    },
+  };
+}

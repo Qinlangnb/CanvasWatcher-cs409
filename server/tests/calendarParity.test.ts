@@ -191,6 +191,60 @@ describe("manual events", () => {
   });
 });
 
+describe("calendar range query", () => {
+  it("returns a series whose first occurrence is on the last evening of the range, west and east of UTC", async () => {
+    const ada = await signUp();
+    for (const [zone, from, to] of [
+      ["America/Chicago", "2026-11-15T06:00:00Z", "2026-11-22T06:00:00Z"],
+      ["Asia/Shanghai", "2026-11-14T16:00:00Z", "2026-11-21T16:00:00Z"],
+      ["UTC", "2026-11-15T00:00:00Z", "2026-11-22T00:00:00Z"],
+    ] as const) {
+      await ada.send("patch", "/api/settings", { body: { time_zone: zone } });
+      const created = await ada.send("post", "/api/calendar/events", {
+        body: { title: "Late lab", start: "2026-11-21T19:30", end: "2026-11-21T20:30", event_type: "class", recurrence_rule: "FREQ=WEEKLY;BYDAY=SA;COUNT=4" },
+      });
+      expect(created.status).toBe(201);
+      const query = `from=${from}&to=${to}`;
+      const listed = (await ada.send("get", `/api/calendar/events?${query}`)).body;
+      expect(listed.map((event: { start: string }) => event.start)).toEqual([created.body.start]);
+      expect((await ada.send("get", `/api/calendar/view?${query}`)).body.events).toHaveLength(1);
+      await ada.send("delete", `/api/calendar/events/${created.body.id}`);
+    }
+  });
+
+  it("reads every event in the range, past 2,000 rows, and plans capacity from all of them", async () => {
+    const ada = await signUp();
+    await ada.send("patch", "/api/settings", { body: { time_zone: "UTC" } });
+    const { id: userId } = await db.user.findFirstOrThrow({ where: { username: "ada" } });
+    const day = new Date(Date.now() + 2 * DAY).toISOString().slice(0, 10);
+    const dayStart = Date.parse(`${day}T00:00:00Z`);
+    await ada.send("put", `/api/calendar/availability/overrides/${day}`, {
+      body: { date: day, available_intervals: [{ start: "09:00", end: "17:00" }] },
+    });
+    // 2,100 free reminders early in the day sort ahead of the one busy event.
+    await db.calendarEvent.createMany({
+      data: Array.from({ length: 2100 }, (_, index) => ({
+        userId,
+        title: `Reminder ${index}`,
+        startAt: new Date(dayStart + index * 10_000),
+        endAt: new Date(dayStart + index * 10_000 + 60_000),
+        busy: false,
+      })),
+    });
+    const lecture = await ada.send("post", "/api/calendar/events", { body: { title: "Lecture", start: `${day}T12:00:00Z`, end: `${day}T13:00:00Z` } });
+    expect(lecture.status).toBe(201);
+
+    const query = `from=${day}T00:00:00Z&to=${day}T23:59:59Z`;
+    const listed = (await ada.send("get", `/api/calendar/events?${query}`)).body;
+    expect(listed).toHaveLength(2101);
+    expect(listed.at(-1)).toMatchObject({ title: "Lecture" });
+    expect(new Set(listed.map((event: { key: string }) => event.key)).size).toBe(2101);
+    expect((await ada.send("get", `/api/calendar/view?${query}`)).body.events).toHaveLength(2101);
+    // The busy lecture, sorted after 2,100 rows, still takes its hour.
+    expect((await ada.send("get", `/api/calendar/capacity?${query}`)).body).toMatchObject({ minutes: 420, source: "calendar" });
+  });
+});
+
 describe("ics import", () => {
   it("previews, asks for a zone for floating times, and imports with it", async () => {
     const ada = await signUp();
@@ -211,6 +265,23 @@ describe("ics import", () => {
     const imported = await ada.send("post", "/api/calendar/sources", { body: { ics: floating, time_zone: "America/Chicago" } });
     expect(imported.status).toBe(201);
     expect(imported.body).toMatchObject({ time_zone: "America/Chicago", event_count: 1, read_only: true });
+  });
+
+  it("reports all-day boundaries by their own dates west of UTC", async () => {
+    const ada = await signUp();
+    await ada.send("patch", "/api/settings", { body: { time_zone: "America/Chicago" } });
+    const date = (days: number) => new Date(Date.now() + days * DAY).toISOString().slice(0, 10);
+    const allDay = vevent("UID:holiday", "SUMMARY:Holiday", `DTSTART;VALUE=DATE:${date(10).replace(/-/g, "")}`);
+    // 02:00 UTC is the previous evening in Chicago.
+    const evening = vevent("UID:review", "SUMMARY:Review", `DTSTART:${date(13).replace(/-/g, "")}T020000Z`, "DURATION:PT1H");
+    const file = ics(allDay, evening);
+    const preview = await ada.send("post", "/api/calendar/sources/preview", { body: { ics: file } });
+    expect(preview.body).toMatchObject({ event_count: 2, range_start: date(10), range_end: date(12) });
+    const imported = await ada.send("post", "/api/calendar/sources", { body: { ics: file } });
+    expect(imported.body).toMatchObject({ range_start: date(10), range_end: date(12) });
+    expect((await ada.send("get", "/api/calendar/sources")).body).toEqual([expect.objectContaining({ range_start: date(10), range_end: date(12) })]);
+    const onlyAllDay = await ada.send("post", "/api/calendar/sources/preview", { body: { ics: ics(allDay) } });
+    expect(onlyAllDay.body).toMatchObject({ range_start: date(10), range_end: date(10) });
   });
 
   it("re-imports by UID, confirms removals and skips the same file", async () => {

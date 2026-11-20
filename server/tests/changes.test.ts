@@ -93,6 +93,35 @@ describe("changes feed", () => {
     expect(detail.body.review).toMatchObject({ status: "pending" });
   });
 
+  it("scopes the unread count and Mark all read to the chosen course and the feed's scope", async () => {
+    seedCourse(fakeCanvas, 102, "MATH 241");
+    const ada = await adaWithChanges();
+    const courses = (await ada.send("get", "/api/courses")).body as { id: number; code: string }[];
+    const cs = courses.find((course) => course.code === "CS 409")?.id;
+    const math = courses.find((course) => course.code === "MATH 241")?.id;
+    const count = async (browser: Browser, important: boolean, courseId?: number) =>
+      (await browser.send("get", `/api/changes/unread-count?important=${important}${courseId ? `&course_id=${courseId}` : ""}`)).body.count;
+    expect(await count(ada, true, math)).toBe(0);
+    expect(await count(ada, false, math)).toBe(0);
+    expect(await count(ada, true, cs)).toBe(2);
+    expect(await count(ada, false, cs)).toBe(3);
+    expect(await count(ada, true)).toBe(2);
+    const bob = await signUp({ username: "bob", email: "bob@example.com" });
+    expect(await count(bob, false, cs)).toBe(0);
+
+    // Important scope: only what that feed shows is marked read; the hidden edit stays unread.
+    expect((await ada.send("post", "/api/changes/mark-all-read", { body: { course_id: math, important: true } })).body.updated).toBe(0);
+    expect((await ada.send("post", "/api/changes/mark-all-read", { body: { course_id: cs, important: true } })).body.updated).toBe(2);
+    expect(await count(ada, true, cs)).toBe(0);
+    expect(await count(ada, false, cs)).toBe(1);
+    const left = (await ada.send("get", `/api/changes?unread=true&course_id=${cs}`)).body.items as { category: string }[];
+    expect(left.map((item) => item.category)).toEqual(["assignment"]);
+    expect((await ada.send("post", "/api/changes/mark-all-read", { body: { important: "yes" } })).status).toBe(422);
+    // Everything: the rest.
+    expect((await ada.send("post", "/api/changes/mark-all-read", { body: { course_id: cs } })).body.updated).toBe(1);
+    expect(await count(ada, false)).toBe(0);
+  });
+
   it("reports a grade release once, then a later change of the grade", async () => {
     seedCourse(fakeCanvas);
     const ada = await signUp();
@@ -317,6 +346,28 @@ describe("notifications", () => {
     // A dismissed notice is not raised again.
     expect(await notify(db, owner, { key: "canvas-expiration:1:pat:soon", level: "critical", title: "Token expires", body: "In 2 days." })).toBe(false);
     expect((await ada.send("get", "/api/notifications")).body).toHaveLength(1);
+  });
+});
+
+describe("notification banners", () => {
+  it("shows an old critical notice behind many newer ones, then the newest of the rest", async () => {
+    const ada = await signUp();
+    const owner = await userId(ada);
+    const start = Date.now() - 100 * 60_000;
+    await db.notification.createMany({
+      data: Array.from({ length: 60 }, (_, index) => ({
+        userId: owner,
+        level: index === 0 ? "critical" : "important",
+        title: `Notice ${index}`,
+        body: "Body",
+        dedupeKey: `test:${index}`,
+        createdAt: new Date(start + index * 60_000),
+      })),
+    });
+    const shown = (await ada.send("get", "/api/notifications")).body as { level: string; title: string }[];
+    expect(shown.map((notice) => `${notice.level}:${notice.title}`)).toEqual(["critical:Notice 0", "important:Notice 59", "important:Notice 58"]);
+    const bob = await signUp({ username: "bob", email: "bob@example.com" });
+    expect((await bob.send("get", "/api/notifications")).body).toEqual([]);
   });
 });
 

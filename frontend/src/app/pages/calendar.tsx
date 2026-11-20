@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router";
 import { type CalendarFilters, type CalendarLayer, type CalendarWarning, calendarOf, readFilters, useCalendarView, writeFilters } from "../calendarApi";
-import { addMonths, dayLabel, minutesOnDay, monthGrid, monthLabel, placeEvents, sameMonth, slotValue } from "../calendarGrid";
+import { addMonths, dayHours, dayLabel, minutesOnDay, monthGrid, monthLabel, placeEvents, sameMonth } from "../calendarGrid";
 import { EventDialog, ImportCalendarDialog } from "../events";
 import { formatMinutes, formatTime } from "../format";
 import { CalendarIcon, ChevronLeftIcon, ChevronRightIcon, ClipboardIcon, ClockIcon, LockIcon, PlusIcon, UploadIcon } from "../icons";
@@ -187,7 +187,8 @@ function DayView({
   });
   const dayStart = Date.parse(rangeOf(date, date, zone).from);
   const nowMinute = date === today ? (Date.now() - dayStart) / 60_000 : null;
-  const hours = Array.from({ length: 24 }, (_, hour) => hour);
+  // The day's real hours: 23 or 25 on daylight-saving days, each labelled and created from its own instant.
+  const hours = dayHours(date, zone);
 
   return (
     <div className="day-view">
@@ -205,22 +206,28 @@ function DayView({
           ))}
         </ul>
       ) : null}
-      <div className="time-grid" style={{ height: `${24 * HOUR_PX}px` }}>
+      <div className="time-grid" style={{ height: `${hours.length * HOUR_PX}px` }}>
         <ol className="time-slots">
           {hours.map((hour) => {
-            const label = formatTime(new Date(dayStart + hour * 3_600_000), zone);
+            const time = formatTime(new Date(hour.at), zone);
+            const label = hour.repeated ? `${time} ${hour.zoneName}` : time;
+            const slot = hour.slot;
             return (
-              <li key={hour} style={{ height: `${HOUR_PX}px` }}>
+              <li key={hour.at} style={{ height: `${HOUR_PX}px` }}>
                 <span className="time-label" aria-hidden="true">
-                  {label}
+                  {time}
+                  {hour.repeated ? <span className="time-label-zone">{hour.zoneName}</span> : null}
                 </span>
-                <button
-                  type="button"
-                  className="time-slot"
-                  onClick={() => onCreate({ date, slot: { start: slotValue(date, hour * 60), end: slotValue(date, hour * 60 + 60) } })}
-                >
-                  <span className="visually-hidden">Add an event at {label}</span>
-                </button>
+                {slot ? (
+                  <button type="button" className="time-slot" onClick={() => onCreate({ date, slot })}>
+                    <span className="visually-hidden">Add an event at {label}</span>
+                  </button>
+                ) : (
+                  // Clocks go back: this wall-clock hour happens twice, so it can't be picked from here.
+                  <span className="time-slot repeated" title="This hour happens twice as clocks go back. Use New event and choose another time.">
+                    <span className="visually-hidden">{label} happens twice as clocks go back</span>
+                  </span>
+                )}
               </li>
             );
           })}

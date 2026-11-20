@@ -9,7 +9,7 @@ import { useChanges, useConnection, useMe, useToday, useUpdateTask } from "../qu
 import { useNow } from "../shell";
 import { useTaskEditor } from "../tasks";
 import { useToast } from "../toast";
-import type { Task, Today, TodayItem, UpcomingItem } from "../types";
+import type { OverdueItem, Task, Today, TodayItem, UpcomingItem } from "../types";
 import { Alert, Badge, EmptyState, PageHeader, QueryError, SkeletonList } from "../ui";
 import { eventOrder, eventTimeLabel } from "../zoned";
 import { PRIORITY_TONES } from "../taskHelpers";
@@ -123,10 +123,48 @@ function PlanNote({ item }: { item: TodayItem }) {
   );
 }
 
+/**
+ * Open work overdue by more than a week. The plan leaves it out (it takes no study time or capacity),
+ * but it stays listed here, as the earlier app's Today always listed overdue work.
+ */
+function OverdueEarlier({ items, count, now, open }: { items: OverdueItem[]; count: number; now: Date; open: boolean }) {
+  if (count === 0) return null;
+  return (
+    <details className="plan-more overdue-earlier" open={open}>
+      <summary>
+        Overdue for more than a week <span className="count">{count}</span>
+      </summary>
+      <p className="muted">Not in today's plan. Finish it, check it off, or ignore it if it no longer matters.</p>
+      <ul className="task-list">
+        {items.map((item) => (
+          <ExpandableTaskRow
+            key={item.task.id}
+            task={item.task}
+            now={now}
+            extra={
+              <p className="plan-note">
+                <Badge tone={REASON_LABELS.overdue.tone}>{REASON_LABELS.overdue.label}</Badge>
+                <WorkControl task={item.task} compact />
+              </p>
+            }
+          />
+        ))}
+      </ul>
+      {count > items.length ? (
+        <p className="muted">
+          Showing the {items.length} most recently due. The rest are under Overdue on each course's <Link to="/courses">Tasks tab</Link>.
+        </p>
+      ) : null}
+    </details>
+  );
+}
+
 function PlanSection({ plan, now }: { plan: Today; now: Date }) {
   const editor = useTaskEditor();
   const planned = plan.items.filter((item) => item.planned_minutes > 0);
   const waiting = plan.items.filter((item) => item.planned_minutes === 0);
+  const overdueEarlier = plan.overdue_earlier ?? [];
+  const overdueEarlierCount = plan.overdue_earlier_count ?? overdueEarlier.length;
   const ended = now >= new Date(plan.study_window.end);
   const overloaded = plan.due_today_minutes > plan.capacity_minutes && !ended;
   return (
@@ -142,7 +180,7 @@ function PlanSection({ plan, now }: { plan: Today; now: Date }) {
           time left. Ask for an extension, study longer, or lower an estimate if a task is quicker than it looks.
         </Alert>
       ) : null}
-      {plan.items.length === 0 ? (
+      {plan.items.length === 0 && overdueEarlierCount === 0 ? (
         <EmptyState
           icon={<ClipboardIcon size={28} />}
           title="Nothing to plan"
@@ -185,6 +223,7 @@ function PlanSection({ plan, now }: { plan: Today; now: Date }) {
           </ul>
         </details>
       ) : null}
+      <OverdueEarlier items={overdueEarlier} count={overdueEarlierCount} now={now} open={plan.items.length === 0} />
     </section>
   );
 }

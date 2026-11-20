@@ -7,8 +7,8 @@ import type { Prisma } from "../generated/prisma/client.js";
 import { FieldError, HttpError } from "../http/errors.js";
 import { idParam, parseQuery } from "../http/params.js";
 import { TASK_TYPES } from "../tasks/effort.js";
-import { taskChanged } from "../tasks/progress.js";
-import { correctionFor, stopTaskTimer } from "../tasks/work.js";
+import { applyTaskChange } from "../tasks/state.js";
+import { correctionFor } from "../tasks/work.js";
 import { endOfLocalDay, mountProgressRoutes, taskAttachments } from "./work.js";
 import { openTaskWhere, presentTask, taskDescription, taskInclude } from "./present.js";
 import { getSettings } from "./settings.js";
@@ -161,9 +161,6 @@ export function tasksRouter(db: Db): Router {
       throw new HttpError(409, "TASK_FROM_SOURCE", "This task comes from a synced source; its title and due date follow that source.");
     }
     const now = new Date();
-    // Done, ignored and progress are the task's state: they bump its revision, and a stale revision is refused.
-    const stateChange = body.done !== undefined || body.ignored !== undefined || body.progress !== undefined;
-    if (stateChange && body.expected_revision !== undefined && body.expected_revision !== task.stateRevision) throw taskChanged();
     const settings = body.start_today !== undefined || body.due_at !== undefined || body.due_date_only !== undefined ? await getSettings(db, userId) : null;
     let startedOn: string | null | undefined;
     if (body.start_today !== undefined && settings) {
@@ -177,37 +174,25 @@ export function tasksRouter(db: Db): Router {
         ? {}
         : { dueAt: dueAt && dateOnly && settings ? endOfLocalDay(dueAt, settings.timeZone) : dueAt, dueDateOnly: Boolean(dueAt && dateOnly) };
     const spent = body.spent_minutes !== undefined ? await correctionFor(db, userId, task, body.spent_minutes, now) : undefined;
-    const data: Prisma.TaskUpdateInput = {
-      ...(body.done !== undefined && { completedAt: body.done ? (task.completedAt ?? now) : null }),
-      ...(body.ignored !== undefined && { ignoredAt: body.ignored ? (task.ignoredAt ?? now) : null }),
-      ...(body.progress !== undefined && { progress: body.progress }),
-      ...(body.estimated_minutes !== undefined && { estimatedMinutes: body.estimated_minutes }),
-      ...(spent !== undefined && { spentMinutes: spent }),
-      ...(body.notes !== undefined && { notes: body.notes || null }),
-      ...(startedOn !== undefined && { startedOn }),
-      ...(body.title !== undefined && { title: body.title }),
-      ...(body.type !== undefined && { taskType: body.type }),
-      ...due,
-      ...(stateChange && { stateRevision: { increment: 1 } }),
-    };
-    let updated;
-    try {
-      updated = await db.task.update({ where: { id: task.id, stateRevision: task.stateRevision }, data, include: taskInclude });
-    } catch (error) {
-      // Another change landed between reading and writing this task.
-      if ((error as { code?: string }).code === "P2025") throw taskChanged();
-      throw error;
-    }
-    if (body.done === true || body.ignored === true) {
-      // Completing or ignoring work ends its timer.
-      await stopTaskTimer(db, userId, task.id, now);
-      updated = await db.task.findUniqueOrThrow({ where: { id: task.id }, include: taskInclude });
-    }
-    if (body.done !== undefined || body.progress !== undefined) {
-      await db.taskProgress.create({
-        data: { userId, taskId: task.id, recordedAt: now, progress: updated.progress, completed: updated.completedAt !== null, origin: "user" },
-      });
-    }
+    // Done, ignored and progress are the task's state (tasks/state.ts): they bump its revision, a stale
+    // revision is refused, progress 100 completes the task and completing or ignoring stops its timer.
+    await applyTaskChange(db, {
+      userId,
+      task,
+      state: { done: body.done, ignored: body.ignored, progress: body.progress },
+      expectedRevision: body.expected_revision,
+      now,
+      data: {
+        ...(body.estimated_minutes !== undefined && { estimatedMinutes: body.estimated_minutes }),
+        ...(spent !== undefined && { spentMinutes: spent }),
+        ...(body.notes !== undefined && { notes: body.notes || null }),
+        ...(startedOn !== undefined && { startedOn }),
+        ...(body.title !== undefined && { title: body.title }),
+        ...(body.type !== undefined && { taskType: body.type }),
+        ...due,
+      },
+    });
+    const updated = await db.task.findUniqueOrThrow({ where: { id: task.id }, include: taskInclude });
     res.json(presentTask(updated, now));
   });
 

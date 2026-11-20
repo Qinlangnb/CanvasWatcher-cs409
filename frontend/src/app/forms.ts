@@ -193,6 +193,21 @@ export function eventDraft(event: CalendarEvent | undefined, date: string, zone:
   };
 }
 
+/**
+ * The event form's Course choices: the active courses, plus the event's own course when it isn't one
+ * of them (it was archived), marked so, so the form shows what the event is linked to.
+ */
+export function eventCourseOptions(
+  courses: { id: number; code: string }[],
+  linked: CalendarEvent["course"] | undefined,
+): { id: number; label: string; archived: boolean }[] {
+  const options = courses.map((course) => ({ id: course.id, label: course.code, archived: false }));
+  if (linked && !courses.some((course) => course.id === linked.id)) {
+    options.push({ id: linked.id, label: `${linked.code} (archived)`, archived: true });
+  }
+  return options;
+}
+
 const LOCAL_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 
 /** The fields the original app added to events: only sent when the draft has them. */

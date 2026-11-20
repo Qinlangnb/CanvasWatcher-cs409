@@ -48,8 +48,8 @@ export function ChangeFeed({ courseId, unread = false, important = false }: { co
   );
 }
 
-/** "Mark all as read", for every course or one. */
-export function MarkAllReadButton({ courseId, unreadCount }: { courseId?: number; unreadCount: number }) {
+/** "Mark all as read", for every course or one; `important` keeps it to the Important set shown. */
+export function MarkAllReadButton({ courseId, important = false, unreadCount }: { courseId?: number; important?: boolean; unreadCount: number }) {
   const markAll = useMarkAllRead();
   const toast = useToast();
   return (
@@ -58,7 +58,7 @@ export function MarkAllReadButton({ courseId, unreadCount }: { courseId?: number
       className="button secondary"
       disabled={unreadCount === 0 || markAll.isPending}
       onClick={() =>
-        markAll.mutate(courseId, {
+        markAll.mutate({ courseId, important }, {
           onSuccess: ({ updated }) => toast(`Marked ${plural(updated, "change")} as read.`),
           onError: (error) => toast(error.message, "error"),
         })
@@ -77,9 +77,9 @@ export function ChangesPage() {
   const important = params.get("scope") !== "all";
   const courseId = Number(params.get("course")) || undefined;
   const courses = useCourses();
-  const unreadCount = useUnreadCount(true, important);
-  const courseUnread = courses.data?.find((course) => course.id === courseId)?.counts.unread_changes;
-  const count = courseId && !important ? (courseUnread ?? 0) : (unreadCount.data?.count ?? 0);
+  // One count for exactly what the feed shows: this course (or all) and this scope.
+  const unreadCount = useUnreadCount(true, important, courseId);
+  const count = unreadCount.data?.count ?? 0;
 
   const update = (changes: Record<string, string | undefined>) => {
     const next = new URLSearchParams(params);
@@ -99,7 +99,7 @@ export function ChangesPage() {
             ? "New files, new announcements, grade releases and deadline changes, newest first. Page edits and other updates are under Everything."
             : "Everything CanvasWatcher noticed in your courses, newest first."
         }
-        actions={<MarkAllReadButton courseId={courseId} unreadCount={count} />}
+        actions={<MarkAllReadButton courseId={courseId} important={important} unreadCount={count} />}
       />
       <div className="toolbar">
         <div className="segmented" role="group" aria-label="Which changes">

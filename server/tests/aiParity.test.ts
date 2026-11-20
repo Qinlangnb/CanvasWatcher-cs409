@@ -318,6 +318,51 @@ describe("AI Chat conversations and confirmations", () => {
     expect(stored.body.messages[2].confirmation.status).toBe("applied");
   });
 
+  it("applies confirmed task changes through the task state machine", async () => {
+    let taskId = 0;
+    const ai = new ScriptedAi([
+      () => ({ role: "assistant", content: null, tool_calls: [call("a", "mark_task_completed", { task_id: taskId })] }),
+      () => ({ role: "assistant", content: null, tool_calls: [call("b", "ignore_task", { task_id: taskId })] }),
+      () => ({ role: "assistant", content: null, tool_calls: [call("c", "set_task_progress", { task_id: taskId, progress_percent: 100 })] }),
+      () => ({ role: "assistant", content: null, tool_calls: [call("d", "undo_ignore_task", { task_id: taskId })] }),
+    ]);
+    const { app } = appWith(ai);
+    const ada = await adaOn(app);
+    const [mp] = (await ada.send("get", "/api/tasks")).body;
+    const { body: reading } = await ada.send("post", "/api/tasks", { body: { course_id: mp.course.id, title: "Reading" } });
+    const tasks = [mp, reading];
+    const confirm = async (message: string) => {
+      const proposed = await ada.send("post", "/api/ai/chat", { body: { message } });
+      const done = await ada.send("post", "/api/ai/chat/confirm", { body: { confirmation_id: proposed.body.confirmation.id, action: "confirm" } });
+      expect(done.body.confirmation.status).toBe("applied");
+      return (await ada.send("get", `/api/tasks/${taskId}`)).body;
+    };
+    const history = () => db.taskProgress.findMany({ where: { taskId }, orderBy: { id: "asc" }, select: { progress: true, completed: true } });
+
+    // Mark done: the running timer stops, the revision moves on and a history row is kept.
+    taskId = tasks[0].id;
+    await ada.send("post", `/api/tasks/${taskId}/work/start`);
+    const done = await confirm("Mark MP 1 done");
+    expect(done).toMatchObject({ state: "done", state_revision: tasks[0].state_revision + 1 });
+    expect((await ada.send("get", "/api/work/active")).body.active).toBeNull();
+    expect(await history()).toEqual([{ progress: 0, completed: true }]);
+
+    // Ignore: the timer stops too.
+    taskId = tasks[1].id;
+    await ada.send("post", `/api/tasks/${taskId}/work/start`);
+    const ignored = await confirm("Ignore it");
+    expect(ignored).toMatchObject({ state: "ignored", state_revision: tasks[1].state_revision + 1 });
+    expect((await ada.send("get", "/api/work/active")).body.active).toBeNull();
+
+    // 100% completes the task, as the progress slider does.
+    const full = await confirm("I finished it");
+    expect(full).toMatchObject({ progress: 100, state: "done", state_revision: tasks[1].state_revision + 2 });
+    expect(full.completed_at).not.toBeNull();
+    expect(await history()).toEqual([{ progress: 100, completed: true }]);
+    const back = await confirm("Stop ignoring it");
+    expect(back).toMatchObject({ ignored_at: null, state_revision: tasks[1].state_revision + 3 });
+  });
+
   it("lets proposals expire and be cancelled", async () => {
     const ai = new ScriptedAi([
       () => ({ role: "assistant", content: null, tool_calls: [call("a", "ignore_task", { task_id: taskId })] }),

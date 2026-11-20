@@ -23,11 +23,29 @@ test("banners sit at the top of the app, critical ones as alerts, each with a Di
 
 test("the Changes feed and unread count default to the Important set, with a switch to Everything", () => {
   assert.match(changes, /const important = params\.get\("scope"\) !== "all";/);
-  assert.match(changes, /useUnreadCount\(true, important\)/);
+  assert.match(changes, /useUnreadCount\(true, important, courseId\)/);
   assert.match(changes, />\s*Everything\s*</);
-  assert.match(queries, /export function useUnreadCount\(enabled = true, important = true\)/);
+  assert.match(queries, /export function useUnreadCount\(enabled = true, important = true, courseId\?: number\)/);
   assert.match(queries, /important: filters\.important \|\| undefined/);
   assert.match(today, /useChanges\(\{ unread: true, important: true, pages: 1 \}\)/);
+});
+
+test("the unread count and Mark all as read follow the chosen course and scope", () => {
+  // One count, for exactly the course and scope the feed shows; no fallback to the course's all-changes count.
+  assert.match(changes, /const count = unreadCount\.data\?\.count \?\? 0;/);
+  assert.doesNotMatch(changes, /counts\.unread_changes/);
+  assert.match(queries, /query\("\/api\/changes\/unread-count", \{ important: important \|\| undefined, course_id: courseId \}\)/);
+  assert.match(queries, /keys\.unreadCount\(important, courseId\)/);
+  // Mark all as read sends the scope, so changes the Important feed hides stay unread.
+  assert.match(changes, /<MarkAllReadButton courseId=\{courseId\} important=\{important\} unreadCount=\{count\} \/>/);
+  assert.match(changes, /markAll\.mutate\(\{ courseId, important \}/);
+  assert.match(queries, /\.\.\.\(important \? \{ important: true \} : \{\}\)/);
+});
+
+test("Today keeps work overdue by more than a week visible, outside the plan", () => {
+  assert.match(today, /<OverdueEarlier items=\{overdueEarlier\} count=\{overdueEarlierCount\}/);
+  assert.match(today, /Overdue for more than a week/);
+  assert.match(today, /plan\.items\.length === 0 && overdueEarlierCount === 0/);
 });
 
 test("change rows carry a category stripe, the event label and an inline read toggle", () => {

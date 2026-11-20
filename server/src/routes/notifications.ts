@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { currentAuth } from "../auth/middleware.js";
 import type { Db } from "../db.js";
+import type { Prisma } from "../generated/prisma/client.js";
 import { HttpError } from "../http/errors.js";
 import { idParam } from "../http/params.js";
 import { bannerOrder, presentNotification } from "../notifications/notify.js";
@@ -13,15 +14,20 @@ const notFound = () => new HttpError(404, "NOTIFICATION_NOT_FOUND", "That notifi
 export function notificationsRouter(db: Db): Router {
   const router = Router();
 
-  /** Banners not dismissed yet: critical first, then newest. */
+  /**
+   * Banners not dismissed yet: critical first, then newest. The newest few of each level are read
+   * from the database, so an older critical notice is never hidden behind many newer ones.
+   */
   router.get("/", async (_req, res) => {
     const userId = currentAuth(res.locals).user.id;
-    const rows = await db.notification.findMany({
-      where: { userId, dismissedAt: null },
-      orderBy: { id: "desc" },
-      take: 50,
-    });
-    res.json(rows.sort(bannerOrder).slice(0, SHOWN).map(presentNotification));
+    const newest = (level: Prisma.StringFilter | string) =>
+      db.notification.findMany({
+        where: { userId, dismissedAt: null, level },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: SHOWN,
+      });
+    const levels = await Promise.all([newest("critical"), newest("important"), newest({ notIn: ["critical", "important"] })]);
+    res.json(levels.flat().sort(bannerOrder).slice(0, SHOWN).map(presentNotification));
   });
 
   router.post("/:id/dismiss", async (req, res) => {

@@ -64,6 +64,52 @@ test("timed events sit on the day grid in lanes, clipped to the day", () => {
   assert.equal(grid.slotValue("2026-11-18", 24 * 60), "2026-11-18T23:59");
 });
 
+test("Day view rows follow the zone's real hours on daylight-saving days", async () => {
+  const { DateTime } = await import(JSON.parse(luxon));
+  const wall = (value) => DateTime.fromFormat(value, "yyyy-LL-dd'T'HH:mm", { zone: CHICAGO });
+  for (const [date, count] of [["2026-03-08", 23], ["2026-11-01", 25], ["2026-11-18", 24]]) {
+    const rows = grid.dayHours(date, CHICAGO);
+    assert.equal(rows.length, count, date);
+    rows.forEach((row, index) => {
+      // Rows sit one real hour apart, like the event blocks placed by elapsed minutes.
+      if (index > 0) assert.equal(row.at - rows[index - 1].at, 3_600_000);
+      // The hour shown is the hour of the row's instant.
+      assert.equal(DateTime.fromMillis(row.at, { zone: CHICAGO }).toFormat("yyyy-LL-dd'T'HH:mm"), row.wall);
+      if (!row.slot) {
+        assert.equal(row.repeated, true);
+        return;
+      }
+      // A click creates the event at the labelled hour; neither end is in a gap or happens twice.
+      assert.equal(row.slot.start, row.wall);
+      for (const value of [row.slot.start, row.slot.end]) {
+        const time = wall(value);
+        assert.ok(time.isValid && time.toFormat("yyyy-LL-dd'T'HH:mm") === value, `${value} exists`);
+        assert.equal(time.getPossibleOffsets().length, 1, `${value} happens once`);
+      }
+      assert.equal(wall(row.slot.start).toMillis(), row.at);
+      assert.ok(row.slot.end > row.slot.start);
+    });
+  }
+  const spring = grid.dayHours("2026-03-08", CHICAGO);
+  assert.deepEqual(spring.slice(1, 3).map((row) => row.slot), [
+    { start: "2026-03-08T01:00", end: "2026-03-08T03:00" },
+    { start: "2026-03-08T03:00", end: "2026-03-08T04:00" },
+  ]);
+  assert.ok(spring.every((row) => !row.wall.endsWith("T02:00")));
+  const fall = grid.dayHours("2026-11-01", CHICAGO);
+  assert.deepEqual(fall.slice(1, 3).map((row) => [row.wall, row.repeated, row.slot]), [
+    ["2026-11-01T01:00", true, null],
+    ["2026-11-01T01:00", true, null],
+  ]);
+  assert.notEqual(fall[1].zoneName, fall[2].zoneName);
+  assert.deepEqual(fall.at(-1).slot, { start: "2026-11-01T23:00", end: "2026-11-01T23:59" });
+  assert.deepEqual(fall[22].slot, { start: "2026-11-01T21:00", end: "2026-11-01T22:00" });
+  // The Day view builds its rows this way, not as 24 fixed hours.
+  const page = read("app/pages/calendar.tsx");
+  assert.match(page, /dayHours\(date, zone\)/);
+  assert.doesNotMatch(page, /length: 24/);
+});
+
 test("event forms send wall-clock times, zone, type, course and recurrence", () => {
   const fresh = forms.eventDraft(undefined, "2026-11-10", CHICAGO, new Date("2026-11-06T18:00:00Z"));
   const draft = {
@@ -111,6 +157,19 @@ test("event forms send wall-clock times, zone, type, course and recurrence", () 
     "3",
     "FREQ=WEEKLY;BYDAY=MO;WKST=MO",
   ]);
+});
+
+test("the event editor shows a linked course even after it was archived", () => {
+  const active = [{ id: 1, code: "CS 409" }, { id: 2, code: "MATH 241" }];
+  const lab = event({ course: { id: 7, code: "PHYS 211" }, event_type: "class", start: "2026-11-18T15:00:00Z", end: "2026-11-18T16:00:00Z" });
+  const draft = forms.eventDraft(lab, "2026-11-18", CHICAGO, new Date());
+  const options = forms.eventCourseOptions(active, lab.course);
+  // The draft's course is among the options, so the select shows it instead of a blank.
+  assert.ok(options.some((option) => String(option.id) === draft.courseId));
+  assert.deepEqual(options.at(-1), { id: 7, label: "PHYS 211 (archived)", archived: true });
+  assert.deepEqual(forms.eventCourseOptions(active, { id: 2, code: "MATH 241" }).map((option) => option.label), ["CS 409", "MATH 241"]);
+  assert.equal(forms.eventCourseOptions(active, null).length, 2);
+  assert.match(read("app/events.tsx"), /eventCourseOptions\(courses\.data \?\? \[\], event\?\.course\)/);
 });
 
 test("the calendar page has Day, Week, Month and Timeline, go to date, filters, layers and warnings", () => {
