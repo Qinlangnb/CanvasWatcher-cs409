@@ -12,6 +12,8 @@ import { getSettings } from "./settings.js";
 const DAY_MS = 86_400_000;
 /** "Due next week" runs from now through the end of the 7th local day after today. */
 export const UPCOMING_DAYS = 7;
+/** At most this many tasks overdue by more than the planner's lookback are listed (oldest last). */
+export const OVERDUE_EARLIER_LIMIT = 50;
 
 /** The original app's priority buckets over the plan score (0-1). */
 export function priorityBucket(score: number): "Low" | "Medium" | "High" | "Critical" {
@@ -34,13 +36,16 @@ export function todayRouter(db: Db): Router {
     const activeCourse = { course: { archivedAt: null } };
 
     const horizonEnd = today.plus({ days: HORIZON_DAYS + 1 }).toJSDate();
-    const [tasks, doneToday, calendar, commutes, availability] = await Promise.all([
+    const lookback = new Date(now.getTime() - OVERDUE_LOOKBACK_DAYS * DAY_MS);
+    // Work overdue by more than the lookback stays out of the plan and its capacity, but is still listed.
+    const overdueEarlierWhere = { userId, ...activeCourse, ...openTaskWhere, dueAt: { lt: lookback } };
+    const [tasks, doneToday, calendar, commutes, availability, overdueEarlier, overdueEarlierCount] = await Promise.all([
       db.task.findMany({
         where: {
           userId,
           ...activeCourse,
           ...openTaskWhere,
-          AND: [{ OR: [{ dueAt: null }, { dueAt: { gte: new Date(now.getTime() - OVERDUE_LOOKBACK_DAYS * DAY_MS) } }] }],
+          AND: [{ OR: [{ dueAt: null }, { dueAt: { gte: lookback } }] }],
         },
         include: taskInclude,
         take: 1000,
@@ -62,6 +67,13 @@ export function todayRouter(db: Db): Router {
       occurrencesBetween(db, userId, dayStart, horizonEnd, settings.timeZone),
       loadCommutes(db, userId),
       loadAvailability(db, userId, today.toISODate() as string, today.plus({ days: 366 }).toISODate() as string),
+      db.task.findMany({
+        where: overdueEarlierWhere,
+        include: taskInclude,
+        orderBy: [{ dueAt: "desc" }, { id: "asc" }],
+        take: OVERDUE_EARLIER_LIMIT,
+      }),
+      db.task.count({ where: overdueEarlierWhere }),
     ]);
 
     // Busy time includes the commute around classes and short gaps between them.
@@ -118,6 +130,12 @@ export function todayRouter(db: Db): Router {
       }),
       upcoming_through: new Date(upcomingEnd.getTime() - 1).toISOString(),
       done_today: doneToday.map((task) => presentTask(task, now)),
+      /**
+       * Open work overdue by more than a week (most recently due first), which the plan leaves out: it
+       * takes no planned time or capacity, but stays visible. `overdue_earlier_count` is the full count.
+       */
+      overdue_earlier: overdueEarlier.map((task) => ({ task: presentTask(task, now), remaining_minutes: remainingMinutes(task) })),
+      overdue_earlier_count: overdueEarlierCount,
       events: todaysEvents.map(presentOccurrence),
     });
   });

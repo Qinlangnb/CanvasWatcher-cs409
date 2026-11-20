@@ -97,6 +97,65 @@ test("progress saves with the revision, and conflicts, reopen and downloads read
   assert.match(read("app/tasks.tsx"), /No specific time/);
 });
 
+test("quick progress commits save in order with the latest revision; only a real conflict refuses", async () => {
+  // A server with applyProgress's revision check.
+  const server = { progress: 0, revision: 3 };
+  const sent = [];
+  const send = async (progress, expected) => {
+    sent.push({ progress, expected });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    if (expected !== server.revision) return { applied: false, state_revision: server.revision, progress: server.progress };
+    server.progress = progress;
+    server.revision += 1;
+    return { applied: true, state_revision: server.revision, progress };
+  };
+  const results = [];
+  const saver = helpers.progressSaver({ progress: 0, revision: 3, send, onResult: (result) => results.push(result.applied) });
+  // Keyup then blur, and a held arrow key: three commits before the first answer.
+  const first = saver.commit(10);
+  assert.equal(saver.busy, true);
+  saver.commit(11);
+  saver.commit(12);
+  await first;
+  assert.deepEqual(sent, [
+    { progress: 10, expected: 3 },
+    { progress: 12, expected: 4 },
+  ]);
+  assert.deepEqual(results, [true, true]);
+  assert.deepEqual(saver.saved, { progress: 12, revision: 5 });
+  // A refetch older than the last answer doesn't roll the revision back.
+  assert.equal(saver.sync(10, 4), false);
+  assert.deepEqual(saver.saved, { progress: 12, revision: 5 });
+
+  // Another tab changes the task: the next save is refused once and the control takes the saved value.
+  server.progress = 40;
+  server.revision = 9;
+  await saver.commit(20);
+  assert.deepEqual(results, [true, true, false]);
+  assert.deepEqual(saver.saved, { progress: 40, revision: 9 });
+  // The following save uses the revision the refusal returned and applies.
+  await saver.commit(50);
+  assert.deepEqual(sent.at(-1), { progress: 50, expected: 9 });
+  assert.deepEqual(results, [true, true, false, true]);
+
+  // A failed request stops the run; the next commit tries again with the same revision.
+  const failing = helpers.progressSaver({
+    progress: 0,
+    revision: 1,
+    send: async (progress, expected) => {
+      sent.push({ progress, expected, failed: true });
+      throw new Error("offline");
+    },
+    onError: (error, target) => results.push(`${error.message}:${target}`),
+  });
+  await failing.commit(30);
+  assert.equal(results.at(-1), "offline:30");
+  assert.equal(failing.busy, false);
+  assert.deepEqual(failing.saved, { progress: 0, revision: 1 });
+  // The slider saves through it.
+  assert.match(read("app/taskExtras.tsx"), /progressSaver\(\{/);
+});
+
 test("files have type tabs in the URL and a menu to move them", () => {
   const files = read("app/fileTypes.tsx");
   assert.match(files, /role="tablist" aria-label="File type"/);

@@ -84,3 +84,46 @@ export function slotValue(date: string, minute: number): string {
   const clamped = Math.max(0, Math.min(23 * 60 + 59, minute));
   return `${date}T${String(Math.floor(clamped / 60)).padStart(2, "0")}:${String(clamped % 60).padStart(2, "0")}`;
 }
+
+export interface HourRow {
+  /** The instant the row starts. */
+  at: number;
+  /** The wall-clock hour the row shows, e.g. "2026-11-01T01:00". */
+  wall: string;
+  /** The hour happens twice (clocks go back); `zoneName` ("CDT", "CST") tells the two apart. */
+  repeated: boolean;
+  zoneName: string;
+  /**
+   * The datetime-local start and end a click on the row creates, both read back to this row's hour;
+   * null when its start is a wall-clock time that happens twice, which the server can't place.
+   */
+  slot: { start: string; end: string } | null;
+}
+
+const WALL = "yyyy-LL-dd'T'HH:mm";
+
+/**
+ * The real hours of `date` in `zone`: 23 on the day clocks go forward (the skipped hour has no row),
+ * 25 when they go back. Each row starts one hour after the previous one, as the event blocks are
+ * placed by elapsed minutes, and its label and slot come from that same instant.
+ */
+export function dayHours(date: string, zone: string): HourRow[] {
+  const dayStart = DateTime.fromFormat(date, DATE, { zone });
+  const dayEnd = dayStart.plus({ days: 1 });
+  const count = Math.round(dayEnd.diff(dayStart, "hours").hours);
+  const twice = (time: DateTime) => DateTime.fromFormat(time.toFormat(WALL), WALL, { zone }).getPossibleOffsets().length > 1;
+  return Array.from({ length: count }, (_, index) => {
+    const start = DateTime.fromMillis(dayStart.toMillis() + index * 3_600_000, { zone });
+    const next = DateTime.fromMillis(start.toMillis() + 3_600_000, { zone });
+    // The last row ends at 23:59 (the next hour is tomorrow); an end that happens twice ends a minute early.
+    const end = next >= dayEnd ? `${date}T23:59` : (twice(next) ? next.minus({ minutes: 1 }) : next).toFormat(WALL);
+    const repeated = twice(start);
+    return {
+      at: start.toMillis(),
+      wall: start.toFormat(WALL),
+      repeated,
+      zoneName: start.toFormat("ZZZZ"),
+      slot: repeated ? null : { start: start.toFormat(WALL), end },
+    };
+  });
+}

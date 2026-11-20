@@ -72,6 +72,8 @@ export function presentEvent(event: EventWithSource, occurrence?: { start: Date;
 }
 
 const DAY_MS = 86_400_000;
+/** Rows read per query by occurrencesBetween, which reads every page. */
+export const EVENT_PAGE_SIZE = 2000;
 
 /**
  * Occurrences overlapping [from, to), sorted. All-day events belong to dates, not instants, so they
@@ -83,25 +85,38 @@ export async function occurrencesBetween(db: Db, userId: string, from: Date, to:
   const lastDay = DateTime.fromJSDate(new Date(to.getTime() - 1), { zone: timeZone }).startOf("day");
   const dayStart = new Date(`${firstDay.toISODate()}T00:00:00.000Z`);
   const dayEnd = new Date(Date.parse(`${lastDay.toISODate()}T00:00:00.000Z`) + DAY_MS);
-  const rows = await db.calendarEvent.findMany({
-    where: {
-      userId,
-      OR: [
-        {
-          recurrenceRule: null,
-          allDay: false,
-          startAt: { lt: to },
-          OR: [{ endAt: { gt: from } }, { startAt: { gte: from } }],
-        },
-        { recurrenceRule: null, allDay: true, startAt: { lt: dayEnd }, endAt: { gt: dayStart } },
-        // Series may start long before the range; they are expanded below.
-        { recurrenceRule: { not: null }, startAt: { lt: dayEnd } },
-      ],
-    },
-    include: eventInclude,
-    orderBy: [{ startAt: "asc" }, { id: "asc" }],
-    take: 2000,
-  });
+  const where: Prisma.CalendarEventWhereInput = {
+    userId,
+    OR: [
+      {
+        recurrenceRule: null,
+        allDay: false,
+        startAt: { lt: to },
+        OR: [{ endAt: { gt: from } }, { startAt: { gte: from } }],
+      },
+      { recurrenceRule: null, allDay: true, startAt: { lt: dayEnd }, endAt: { gt: dayStart } },
+      // Series may start long before the range; they are expanded below. A timed series is matched
+      // against the instants [from, to) (the UTC-midnight day bounds end hours early west of UTC), an
+      // all-day one against the dates.
+      { recurrenceRule: { not: null }, allDay: false, startAt: { lt: to } },
+      { recurrenceRule: { not: null }, allDay: true, startAt: { lt: dayEnd } },
+    ],
+  };
+  // Every matching row is read, a page at a time: the calendar and capacity must never work from a
+  // silently cut list (imports already bound what is stored: 20 calendars of at most 2,000 events).
+  const rows: EventWithSource[] = [];
+  for (;;) {
+    const last = rows.at(-1);
+    const page = await db.calendarEvent.findMany({
+      where,
+      include: eventInclude,
+      orderBy: [{ startAt: "asc" }, { id: "asc" }],
+      take: EVENT_PAGE_SIZE,
+      ...(last && { cursor: { id: last.id }, skip: 1 }),
+    });
+    rows.push(...page);
+    if (page.length < EVENT_PAGE_SIZE) break;
+  }
   const occurrences: Occurrence[] = [];
   const warnings: EventWarning[] = [];
   for (const event of rows) {

@@ -51,7 +51,7 @@ export const keys = {
   files: (params: { courseId?: number; q?: string; type?: string }) => ["files", params] as const,
   changes: (params: { courseId?: number; unread?: boolean; important?: boolean }) => ["changes", "list", params] as const,
   change: (id: number) => ["changes", "detail", id] as const,
-  unreadCount: (important: boolean) => ["changes", "unread-count", { important }] as const,
+  unreadCount: (important: boolean, courseId?: number) => ["changes", "unread-count", { important, courseId }] as const,
 };
 
 function query(path: string, params: Record<string, string | number | boolean | undefined>): string {
@@ -442,11 +442,15 @@ export function useChange(id: number | null) {
   });
 }
 
-/** Unread changes; the Important set unless `important` is false, like the Changes page's default. */
-export function useUnreadCount(enabled = true, important = true) {
+/**
+ * Unread changes; the Important set unless `important` is false, like the Changes page's default.
+ * With `courseId`, only that course's, so the count matches a course-filtered feed.
+ */
+export function useUnreadCount(enabled = true, important = true, courseId?: number) {
   return useQuery({
-    queryKey: keys.unreadCount(important),
-    queryFn: () => request<{ count: number }>(query("/api/changes/unread-count", { important: important || undefined })),
+    queryKey: keys.unreadCount(important, courseId),
+    queryFn: () =>
+      request<{ count: number }>(query("/api/changes/unread-count", { important: important || undefined, course_id: courseId })),
     enabled,
   });
 }
@@ -466,8 +470,12 @@ export function useMarkRead() {
 export function useMarkAllRead() {
   const client = useQueryClient();
   return useMutation({
-    mutationFn: (courseId?: number) =>
-      request<{ updated: number }>("/api/changes/mark-all-read", { method: "POST", body: courseId ? { course_id: courseId } : {} }),
+    /** `important` limits it to the Important set the feed shows, so changes it hides stay unread. */
+    mutationFn: ({ courseId, important }: { courseId?: number; important?: boolean } = {}) =>
+      request<{ updated: number }>("/api/changes/mark-all-read", {
+        method: "POST",
+        body: { ...(courseId ? { course_id: courseId } : {}), ...(important ? { important: true } : {}) },
+      }),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ["changes"] });
       void client.invalidateQueries({ queryKey: ["courses"] });

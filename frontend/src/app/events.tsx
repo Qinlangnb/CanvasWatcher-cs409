@@ -3,7 +3,7 @@ import { useId, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { usePreviewCalendar } from "./calendarApi";
 import { formatBytes, plural } from "./format";
-import { EVENT_TYPES, MAX_ICS_BYTES, eventBody, eventDraft, problemsOf, type EventDraft } from "./forms";
+import { EVENT_TYPES, MAX_ICS_BYTES, eventBody, eventCourseOptions, eventDraft, problemsOf, type EventDraft } from "./forms";
 import { useCourses, useCreateEvent, useDeleteEvent, useImportCalendar, usePlanZone, useUpdateEvent } from "./queries";
 import { useToast } from "./toast";
 import type { CalendarEvent, IcsPreview } from "./types";
@@ -322,9 +322,9 @@ function EventForm({
             hint={draft.eventType === "class" ? "Class events get the course's commute." : undefined}
           >
             <option value="">No course</option>
-            {(courses.data ?? []).map((course) => (
+            {eventCourseOptions(courses.data ?? [], event?.course).map((course) => (
               <option key={course.id} value={course.id}>
-                {course.code}
+                {course.label}
               </option>
             ))}
           </SelectField>

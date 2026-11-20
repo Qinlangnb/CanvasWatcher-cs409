@@ -2557,6 +2557,11 @@ body:has(.tabbar) .toast-region {
   border-top: 1px solid var(--border);
 }
 
+.overdue-earlier > .muted {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+
 .event-list {
   display: grid;
   padding: 0;
@@ -4397,6 +4402,20 @@ body:has(.tabbar) .toast-region {
 
 .time-slot:hover {
   background: var(--surface-2);
+}
+
+.time-slot.repeated {
+  cursor: not-allowed;
+  background: repeating-linear-gradient(135deg, transparent 0 6px, var(--surface-2) 6px 8px);
+}
+
+.time-slot.repeated:hover {
+  background: repeating-linear-gradient(135deg, transparent 0 6px, var(--surface-2) 6px 8px);
+}
+
+.time-label-zone {
+  display: block;
+  font-size: 0.6875rem;
 }
 
 .time-slot:focus-visible {

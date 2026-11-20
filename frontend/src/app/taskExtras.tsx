@@ -7,7 +7,7 @@ import { isSubmitted } from "./forms";
 import { DownloadIcon } from "./icons";
 import { fileDownloadLink, useSaveProgress } from "./parityQueries";
 import { useUpdateTask } from "./queries";
-import { CONTROL_SELECTOR, DATE_ONLY_NOTE, DRAG_THRESHOLD_PX, taskTarget, withoutTime } from "./taskHelpers";
+import { CONTROL_SELECTOR, DATE_ONLY_NOTE, DRAG_THRESHOLD_PX, progressSaver, taskTarget, withoutTime } from "./taskHelpers";
 import { useToast } from "./toast";
 import type { Task, TaskAttachment } from "./types";
 import { Spinner } from "./ui";
@@ -21,7 +21,10 @@ export function formatTaskDue(task: Pick<Task, "due_at" | "deadline_precision">,
   return task.deadline_precision === "date_only" ? `${withoutTime(label)} · ${DATE_ONLY_NOTE}` : label;
 }
 
-/** Progress in 1% steps, saved with the task's revision when let go; 100 completes the task. */
+/**
+ * Progress in 1% steps, saved with the task's revision when let go; 100 completes the task. Saves run
+ * one at a time through progressSaver, each with the revision the previous one returned.
+ */
 export function RevisionProgress({ task }: { task: Task }) {
   const save = useSaveProgress();
   const toast = useToast();
@@ -29,26 +32,39 @@ export function RevisionProgress({ task }: { task: Task }) {
   const id = useId();
   const [value, setValue] = useState(task.progress);
   const actionAt = useRef(new Date().toISOString());
-  useEffect(() => setValue(task.progress), [task.progress, task.state_revision]);
+  const latest = useRef({ task, working, toast });
+  latest.current = { task, working, toast };
+  const saver = useRef<ReturnType<typeof progressSaver> | null>(null);
+  saver.current ??= progressSaver({
+    progress: task.progress,
+    revision: task.state_revision,
+    send: async (progress, expectedRevision) => {
+      const current = latest.current.task;
+      const result = await save.mutateAsync({ task: { ...current, state_revision: expectedRevision }, progress, actionAt: actionAt.current });
+      return { applied: result.applied, state_revision: result.state_revision, progress: result.task.progress };
+    },
+    onResult: (result, target) => {
+      const { task: current, toast: notify } = latest.current;
+      forgetProgress(current.id);
+      if (!result.applied) {
+        setValue(result.progress);
+        notify(CONFLICT_MESSAGE, "info");
+      } else if (target === 100) notify(`Done: ${current.title}`, "success");
+    },
+    onError: (error, target) => {
+      const { task: current, working: running, toast: notify } = latest.current;
+      // While the timer runs, its heartbeat keeps trying to save this.
+      if (running && isApiError(error, 0)) rememberProgress(current.id, target);
+      notify(target === 100 ? "Completion not saved; please retry." : error instanceof Error ? error.message : String(error), "error");
+    },
+  });
+  useEffect(() => {
+    // A refetch older than the last saved answer is ignored; while saving, the slider keeps its value.
+    if (saver.current?.sync(task.progress, task.state_revision) && !saver.current.busy) setValue(task.progress);
+  }, [task.progress, task.state_revision]);
   const commit = () => {
-    if (value === task.progress) return;
-    save.mutate(
-      { task, progress: value, actionAt: actionAt.current },
-      {
-        onSuccess: (result) => {
-          forgetProgress(task.id);
-          if (!result.applied) {
-            setValue(result.task.progress);
-            toast(CONFLICT_MESSAGE, "info");
-          } else if (value === 100) toast(`Done: ${task.title}`, "success");
-        },
-        onError: (error) => {
-          // While the timer runs, its heartbeat keeps trying to save this.
-          if (working && isApiError(error, 0)) rememberProgress(task.id, value);
-          toast(value === 100 ? "Completion not saved; please retry." : error.message, "error");
-        },
-      },
-    );
+    if (value === saver.current?.saved.progress && !saver.current.busy) return;
+    void saver.current?.commit(value);
   };
   return (
     <div className="field range-field task-card-progress" data-task-control>

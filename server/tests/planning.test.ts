@@ -118,6 +118,35 @@ describe("task writes", () => {
     expect(bad.body.detail.map((issue: { loc: string[] }) => issue.loc[1])).toEqual(["progress", "estimated_minutes"]);
   });
 
+  it("completes a task saved at 100% like the progress route: timer stopped, revision bumped, history kept", async () => {
+    const { ada } = await adaWithCourse();
+    const [mp] = (await ada.send("get", "/api/tasks")).body;
+    expect((await ada.send("post", `/api/tasks/${mp.id}/work/start`)).status).toBe(200);
+    const saved = await ada.send("patch", `/api/tasks/${mp.id}`, { body: { progress: 100, expected_revision: mp.state_revision } });
+    expect(saved.status).toBe(200);
+    expect(saved.body).toMatchObject({ state: "done", progress: 100, remaining_minutes: 0, state_revision: mp.state_revision + 1 });
+    expect(saved.body.completed_at).not.toBeNull();
+    expect((await ada.send("get", "/api/work/active")).body.active).toBeNull();
+    expect(await db.workSession.count({ where: { taskId: mp.id, endedAt: null } })).toBe(0);
+    expect(await db.taskProgress.findMany({ where: { taskId: mp.id }, select: { progress: true, completed: true } })).toEqual([
+      { progress: 100, completed: true },
+    ]);
+    expect((await ada.send("get", "/api/tasks")).body).toEqual([]);
+
+    // The progress route gives the same state for the same gesture.
+    const { body: other } = await ada.send("post", "/api/tasks", { body: { course_id: mp.course.id, title: "Reading" } });
+    const posted = await ada.send("post", `/api/tasks/${other.id}/progress`, { body: { progress_percent: 100, expected_revision: 0 } });
+    expect(posted.body.task).toMatchObject({ state: saved.body.state, progress: 100, remaining_minutes: 0, state_revision: 1 });
+
+    // A stale revision and a contradictory done:false are refused without writing anything.
+    const stale = await ada.send("patch", `/api/tasks/${mp.id}`, { body: { progress: 50, expected_revision: mp.state_revision } });
+    expect(stale.status).toBe(409);
+    const contradictory = await ada.send("patch", `/api/tasks/${mp.id}`, { body: { done: false, progress: 100 } });
+    expect(contradictory.status).toBe(422);
+    expect(contradictory.body.detail[0].loc).toEqual(["body", "progress"]);
+    expect((await ada.send("get", `/api/tasks/${mp.id}`)).body).toMatchObject({ state: "done", state_revision: mp.state_revision + 1 });
+  });
+
   it("leaves Canvas-owned fields and Canvas tasks to Canvas", async () => {
     const { ada } = await adaWithCourse();
     const [mp] = (await ada.send("get", "/api/tasks")).body;
@@ -347,6 +376,32 @@ describe("today", () => {
     const undone = (await ada.send("get", "/api/today")).body;
     expect(undone.items.map((entry: { task: { id: number } }) => entry.task.id)).not.toContain(later.id);
     expect((await ada.send("patch", `/api/tasks/${later.id}`, { body: { start_today: "yes" } })).status).toBe(422);
+  });
+
+  it("lists work overdue by more than a week without planning time for it", async () => {
+    const { ada, courseId } = await adaWithCourse();
+    await ada.send("patch", "/api/settings", { body: { time_zone: "UTC", study_start_minute: 0, study_end_minute: 1440 } });
+    const add = async (title: string, dueMs: number, minutes = 60) =>
+      (await ada.send("post", "/api/tasks", { body: { course_id: courseId, title, due_at: fromNow(dueMs), estimated_minutes: minutes } }))
+        .body as { id: number };
+    const recent = await add("Late lab", -HOUR);
+    const old = await add("Old essay", -10 * DAY, 90);
+    const older = await add("Older quiz", -20 * DAY, 30);
+    const finished = await add("Old but done", -12 * DAY);
+    await ada.send("patch", `/api/tasks/${finished.id}`, { body: { done: true } });
+
+    const res = (await ada.send("get", "/api/today")).body;
+    expect(res.items.map((item: { task: { id: number } }) => item.task.id)).toEqual([recent.id]);
+    expect(res.due_today_minutes).toBe(60);
+    expect(res.planned_minutes).toBe(60);
+    expect(res.overdue_earlier_count).toBe(2);
+    expect(res.overdue_earlier).toMatchObject([
+      { task: { id: old.id, state: "overdue" }, remaining_minutes: 90 },
+      { task: { id: older.id, state: "overdue" }, remaining_minutes: 30 },
+    ]);
+
+    // Another student sees none of it.
+    expect((await (await bob()).send("get", "/api/today")).body).toMatchObject({ overdue_earlier: [], overdue_earlier_count: 0 });
   });
 
   it("only plans the signed-in user's tasks", async () => {

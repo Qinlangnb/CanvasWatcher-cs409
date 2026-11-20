@@ -20,9 +20,17 @@ const listQuery = z.object({
   before: z.coerce.number().int().positive().optional(),
 });
 
-const countQuery = z.object({ important: z.enum(["true", "false"]).optional() });
+const countQuery = z.object({
+  /** One course's unread changes (archived or not), like the feed's course filter. */
+  course_id: z.coerce.number().int().positive().optional(),
+  important: z.enum(["true", "false"]).optional(),
+});
 const readState = z.object({ read: z.boolean({ error: "Send read as true or false." }) });
-const markAll = z.object({ course_id: z.number().int().positive().optional() });
+const markAll = z.object({
+  course_id: z.number().int().positive().optional(),
+  /** true: only the Important set the feed shows by default, so changes it hides keep their unread state. */
+  important: z.boolean({ error: "Send important as true or false." }).optional(),
+});
 
 const changeNotFound = () => new HttpError(404, "CHANGE_NOT_FOUND", "That change could not be found.");
 
@@ -60,14 +68,14 @@ export function changesRouter(db: Db): Router {
     const userId = currentAuth(res.locals).user.id;
     const query = parseQuery(countQuery, req.query);
     const important = query.important === "true" ? { userFacing: true } : {};
-    res.json({ count: await db.changeEvent.count({ where: { ...scope(userId, undefined), ...important, readAt: null } }) });
+    res.json({ count: await db.changeEvent.count({ where: { ...scope(userId, query.course_id), ...important, readAt: null } }) });
   });
 
   router.post("/mark-all-read", async (req, res) => {
     const userId = currentAuth(res.locals).user.id;
     const body = markAll.parse(req.body ?? {});
     const result = await db.changeEvent.updateMany({
-      where: { ...scope(userId, body.course_id), readAt: null },
+      where: { ...scope(userId, body.course_id), ...(body.important ? { userFacing: true } : {}), readAt: null },
       data: { readAt: new Date() },
     });
     res.json({ updated: result.count });

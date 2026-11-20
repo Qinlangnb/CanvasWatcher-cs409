@@ -7,6 +7,7 @@ import type { Db } from "../db.js";
 import { FieldError, HttpError } from "../http/errors.js";
 import { eventChangeData, eventChanges, eventCreation, newEventData } from "../routes/calendar.js";
 import { taskChangeSchema } from "../routes/tasks.js";
+import { applyTaskChange } from "../tasks/state.js";
 import type { ToolSpec } from "./provider.js";
 import { issuesText, localTime, parseArguments } from "./tools.js";
 
@@ -281,24 +282,26 @@ export async function applyWrite(name: string, rawArgs: unknown, ctx: WriteConte
   const args = schemas[name].parse(rawArgs);
   const now = ctx.now;
   switch (name) {
+    // Task changes go through the same state machine as PATCH /api/tasks/:id (tasks/state.ts):
+    // revision bump, progress 100 completes, completing or ignoring stops the timer, progress history.
     case "set_task_progress": {
       const typed = args as z.infer<typeof schemas.set_task_progress>;
       const { progress } = taskChangeSchema.parse({ progress: typed.progress_percent });
       const task = await findTask(ctx, typed.task_id);
-      await ctx.db.task.update({ where: { id: task.id }, data: { progress } });
+      await applyTaskChange(ctx.db, { userId: ctx.userId, task, state: { progress }, now });
       return { task_id: task.id, progress };
     }
     case "mark_task_completed": {
       const task = await findTask(ctx, (args as z.infer<typeof taskArgs>).task_id);
-      await ctx.db.task.update({ where: { id: task.id }, data: { completedAt: task.completedAt ?? now } });
+      await applyTaskChange(ctx.db, { userId: ctx.userId, task, state: { done: true }, now });
       return { task_id: task.id, done: true };
     }
     case "ignore_task":
     case "undo_ignore_task": {
       const task = await findTask(ctx, (args as z.infer<typeof taskArgs>).task_id);
-      const ignoredAt = name === "ignore_task" ? (task.ignoredAt ?? now) : null;
-      await ctx.db.task.update({ where: { id: task.id }, data: { ignoredAt } });
-      return { task_id: task.id, ignored: ignoredAt !== null };
+      const ignored = name === "ignore_task";
+      await applyTaskChange(ctx.db, { userId: ctx.userId, task, state: { ignored }, now });
+      return { task_id: task.id, ignored };
     }
     case "archive_course":
     case "restore_course": {

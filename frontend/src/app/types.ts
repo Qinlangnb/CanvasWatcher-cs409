@@ -335,8 +335,14 @@ export interface Today {
   /** The last instant of the 7th local day after today. */
   upcoming_through: string;
   done_today: Task[];
+  /** Open work overdue by more than a week, most recently due first; not planned and takes no capacity. */
+  overdue_earlier: OverdueItem[];
+  /** How many such tasks there are; overdue_earlier holds at most 50. */
+  overdue_earlier_count: number;
   events: CalendarEvent[];
 }
+
+export type OverdueItem = Pick<TodayItem, "task" | "remaining_minutes">;
 
 export type CapacitySource = "calendar" | "availability" | "fallback";
 

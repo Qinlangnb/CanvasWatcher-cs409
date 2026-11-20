@@ -6,6 +6,7 @@ import express, { Router } from "express";
 import { DateTime, IANAZone } from "luxon";
 import { z } from "zod";
 import { currentAuth } from "../auth/middleware.js";
+import { dateOf } from "../calendar/events.js";
 import { IcsError, parseIcs, type ParsedCalendar, type ParsedEvent } from "../calendar/ics.js";
 import type { Db } from "../db.js";
 import type { CalendarSource } from "../generated/prisma/client.js";
@@ -93,12 +94,28 @@ function reconcile(existing: ExistingEvent[], incoming: ParsedEvent[]) {
 
 const sha256 = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 
-function presentSource(
-  source: CalendarSource,
-  stats: { count: number; first: Date | null; last: Date | null },
-  userZone: string,
-) {
-  const day = (date: Date | null) => (date ? DateTime.fromJSDate(date, { zone: source.timeZone ?? userZone }).toISODate() : null);
+/**
+ * The local date an event starts on. All-day events are stored as UTC midnights of their dates, so
+ * they are read in UTC; only timed events are converted into the calendar's zone.
+ */
+const eventDay = (start: Date, allDay: boolean, zone: string): string =>
+  allDay ? dateOf(start) : (DateTime.fromJSDate(start, { zone }).toISODate() as string);
+
+/** The first and last of some local dates ("YYYY-MM-DD" sorts as text). */
+function dateRange(days: string[]): { first: string | null; last: string | null } {
+  const sorted = [...days].sort();
+  return { first: sorted[0] ?? null, last: sorted.at(-1) ?? null };
+}
+
+interface SourceStats {
+  count: number;
+  /** Earliest and latest start of the source's events, apart for all-day and timed events. */
+  starts: { start: Date; allDay: boolean }[];
+}
+
+function presentSource(source: CalendarSource, stats: SourceStats, userZone: string) {
+  const zone = source.timeZone ?? userZone;
+  const range = dateRange(stats.starts.map(({ start, allDay }) => eventDay(start, allDay, zone)));
   return {
     id: source.id,
     name: source.name,
@@ -109,8 +126,8 @@ function presentSource(
     recurring_series_count: source.recurringSeriesCount,
     /** The zone floating times were read in; null when every time named its own. */
     time_zone: source.timeZone,
-    range_start: day(stats.first),
-    range_end: day(stats.last),
+    range_start: range.first,
+    range_end: range.last,
     /** Imported events follow their file. */
     read_only: true,
   };
@@ -118,7 +135,8 @@ function presentSource(
 
 function presentPreview(input: { fileName: string | null; sha: string; parsed: ParsedCalendar; reconciliation: Reconciliation; noOp: boolean; userZone: string }) {
   const { parsed } = input;
-  const day = (date: Date | undefined) => (date ? DateTime.fromJSDate(date, { zone: parsed.timeZone ?? input.userZone }).toISODate() : null);
+  const zone = parsed.timeZone ?? input.userZone;
+  const range = dateRange(parsed.events.map((event) => eventDay(event.startAt, event.allDay, zone)));
   return {
     file_name: input.fileName,
     file_sha256: input.sha,
@@ -127,8 +145,8 @@ function presentPreview(input: { fileName: string | null; sha: string; parsed: P
     time_zone_confirmation_required: parsed.timeZoneConfirmationRequired,
     event_count: parsed.events.length,
     recurring_series_count: parsed.recurringSeriesCount,
-    range_start: day(parsed.events[0]?.startAt),
-    range_end: day(parsed.events.at(-1)?.startAt),
+    range_start: range.first,
+    range_end: range.last,
     reconciliation: input.reconciliation,
     no_op: input.noOp,
     truncated: parsed.truncated,
@@ -171,14 +189,20 @@ export function calendarSourcesRouter(db: Db): Router {
 
   async function stats(userId: string, sourceIds: number[]) {
     const rows = await db.calendarEvent.groupBy({
-      by: ["sourceId"],
+      by: ["sourceId", "allDay"],
       where: { userId, sourceId: { in: sourceIds } },
       _count: { _all: true },
       _min: { startAt: true },
       _max: { startAt: true },
     });
-    const byId = new Map(rows.map((row) => [row.sourceId, { count: row._count._all, first: row._min.startAt, last: row._max.startAt }]));
-    return (id: number) => byId.get(id) ?? { count: 0, first: null, last: null };
+    const byId = new Map<number | null, SourceStats>();
+    for (const row of rows) {
+      const entry = byId.get(row.sourceId) ?? { count: 0, starts: [] };
+      entry.count += row._count._all;
+      for (const start of [row._min.startAt, row._max.startAt]) if (start) entry.starts.push({ start, allDay: row.allDay });
+      byId.set(row.sourceId, entry);
+    }
+    return (id: number): SourceStats => byId.get(id) ?? { count: 0, starts: [] };
   }
 
   const eventRows = (userId: string, sourceId: number, events: ParsedEvent[]) =>
