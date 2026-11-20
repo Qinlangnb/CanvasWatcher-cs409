@@ -90,7 +90,7 @@ export interface BrokerHealth {
   protocol_version?: number;
   version?: string;
   backend_ready?: boolean;
-  /** The CanvasWatcher address the broker hands sessions to (broker 0.8.0 and later). */
+  /** The CanvasWatcher address the broker hands sessions to (broker 0.8.1 and later). */
   backend?: string;
 }
 
@@ -98,7 +98,7 @@ export interface BrokerHealth {
  * Whether the broker serves this site. A broker hands sessions only to the one backend it was
  * registered for, so a broker set up for another site would accept the ticket and then fail to claim
  * it. Local installs talk to the API port directly, so a loopback backend matches a loopback page.
- * Brokers before 0.8.0 don't say which site they serve: "unknown".
+ * Brokers before 0.8.1 don't say which site they serve: "unknown".
  */
 export type BrokerSite = "this" | "other" | "unknown";
 

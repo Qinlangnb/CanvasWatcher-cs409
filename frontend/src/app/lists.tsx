@@ -516,7 +516,10 @@ export function FileTable({ files, showCourse = true }: { files: CourseFile[]; s
                 <span className="course-chip">{file.course.code}</span>
               </td>
             ) : null}
-            <td data-label="Size">{formatBytes(file.size_bytes)}</td>
+            <td data-label="Size">
+              {/* A file cut off at the size limit without a declared length has no known size. */}
+              {file.integrity_status === "TOO_LARGE" && !file.size_bytes ? "Over the limit" : formatBytes(file.size_bytes)}
+            </td>
             <td data-label="Updated">
               {file.updated_at ? (
                 <time dateTime={file.updated_at} title={formatDateTime(file.updated_at)}>

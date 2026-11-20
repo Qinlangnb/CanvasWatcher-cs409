@@ -1,5 +1,25 @@
 # Changelog / 更新记录
 
+## v0.8.1 — parity review fixes / 对照审查修复
+
+### English
+
+- Auth Broker: the broker (now 0.8.1) reports which CanvasWatcher site it serves, and Settings → Sources says when it is set up for another site, outdated, or cannot reach this site, with the commands that register it for this site. Refusals from the broker get specific messages instead of "could not start". A broker registered for an older address (for example the previous site) was the reason browser sign-in failed after the move: re-register it once.
+- Sources: changing a Gradescope or PrairieLearn address is probed through the same guarded connection as course websites (no private addresses, no echoed status). A Canvas source can't be pointed at another Canvas site while an account is signed in; the dialog says to disconnect first. A Gradescope source with no linked course reads "Link a course to start syncing" instead of an error, also after unlinking the last course, and is not scheduled. Course-website files above the size limit are listed as "too large to store" with a link to the site and are not downloaded again every sync; only the schedule page sets homework deadlines, and disagreeing pages are reported; .docx, .txt and .md files are read for the syllabus.
+- Tasks: saving 100% from the task dialog or through AI Chat completes the task, stops its timer and records history like the progress slider; quick slider moves no longer report a false "changed elsewhere"; work overdue by more than a week is listed on Today.
+- Calendar: repeating events starting on the last evening of a view are shown; Day view hours are right on daylight-saving days; large calendars are no longer cut at 2,000 events; all-day import ranges show the right dates; an event linked to an archived course keeps that course in the editor.
+- Changes: the unread count and Mark all as read follow the selected course and the Important/Everything view; an old critical banner is no longer hidden behind newer notices.
+- Found by five DeepSeek parity reviews of v0.8.0 against the earlier app (21 findings, 20 confirmed and fixed, 1 not reproducible) and a verify pass (2 more small fixes).
+
+### 中文
+
+- Auth Broker：Broker（现为 0.8.1）会报告自己服务的 CanvasWatcher 站点；Settings → Sources 会提示它注册到了别的站点、版本过旧或连不上本站，并给出重新注册到本站的命令。Broker 拒绝请求时显示具体原因，而不是笼统的 "could not start"。迁移后浏览器登录失败，原因就是 Broker 仍注册在旧地址（例如原来的站点），重新注册一次即可。
+- 来源：修改 Gradescope 或 PrairieLearn 地址时，探测请求与课程网站走同样的受限连接（不访问私有地址，不回显对方状态码）。已登录账号的 Canvas 来源不能改指向另一个 Canvas 站点，对话框会提示先断开连接。未关联课程的 Gradescope 来源显示 "Link a course to start syncing" 而非错误，取消最后一门课的关联后也一样，且不会被定时同步。超过大小上限的课程网站文件会以 "too large to store" 列出并链接到网站，不再每次同步都重新下载；作业截止日期只取自进度表页面，页面之间不一致时会报告；.docx、.txt、.md 文件会被读取用于查找教学大纲。
+- 任务：在任务对话框或通过 AI Chat 保存 100% 会完成任务、停止计时并记录历史，与进度条一致；快速拖动进度条不再误报"已在别处修改"；逾期超过一周的作业会在 Today 中列出。
+- 日历：在视图最后一晚开始的重复事件会正常显示；夏令时切换当天的日视图小时格正确；大型日历不再在 2000 个事件处截断；全天事件导入范围的日期正确；关联到已归档课程的事件在编辑时保留该课程。
+- 变更：未读数和 "Mark all as read" 会按所选课程和 Important/Everything 视图计算；较旧的严重通知不再被新通知挤掉。
+- 以上问题来自 DeepSeek 对 v0.8.0 与原版的五块对照审查（21 条，20 条确认并修复，1 条不成立）以及一轮复核（另外 2 处小修复）。
+
 ## v0.8.0 — the TypeScript app becomes the official version / TypeScript 版成为正式版
 
 ### English

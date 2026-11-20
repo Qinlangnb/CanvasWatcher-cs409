@@ -77,7 +77,8 @@ function oversizedResult(error: TransportError, limits: RequestLimits, authentic
   const response = error.response;
   if (error.code !== "response_too_large" || !response || response.status < 200 || response.status >= 300) return null;
   const result = statusResult({ url: response.url, status: response.status, headers: response.headers, body: Buffer.alloc(0) }, authenticated);
-  return { ...result, content: null, contentLength: response.declaredBytes ?? limits.maxBytes + 1, error: "response_too_large", tooLarge: true };
+  // Without a Content-Length the real size is unknown: it is stored as 0 and shown as "over the limit".
+  return { ...result, content: null, contentLength: response.declaredBytes ?? null, error: "response_too_large", tooLarge: true };
 }
 
 export function statusResult(response: RawResponse, authenticated: boolean): FetchResult {

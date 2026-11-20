@@ -57,7 +57,7 @@ def create_app(config: Config | None = None, *, login=None, transport=None):
                 job.task.cancel()
         await asyncio.gather(*(j.task for j in jobs.values() if j.task), return_exceptions=True)
 
-    app = FastAPI(title="Academic Watcher Auth Broker", version="0.8.0", lifespan=lifespan,
+    app = FastAPI(title="Academic Watcher Auth Broker", version="0.8.1", lifespan=lifespan,
                   docs_url=None, redoc_url=None, openapi_url=None)
     pna = {"allow_private_network": True} if "allow_private_network" in inspect.signature(CORSMiddleware).parameters else {}
     app.add_middleware(CORSMiddleware, allow_origins=list(config.frontend_origins),
@@ -97,7 +97,7 @@ def create_app(config: Config | None = None, *, login=None, transport=None):
         except (httpx.HTTPError, ValueError, AttributeError):
             pass
         # "backend" lets the page notice a broker registered for a different CanvasWatcher site.
-        return {"state": "BROKER_AVAILABLE", "protocol_version": 1, "version": "0.8.0", "backend_ready": ready,
+        return {"state": "BROKER_AVAILABLE", "protocol_version": 1, "version": "0.8.1", "backend_ready": ready,
                 "backend": config.backend_origin}
 
     async def backend(path: str, body: dict):

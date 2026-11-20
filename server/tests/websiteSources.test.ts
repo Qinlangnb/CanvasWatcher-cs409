@@ -475,6 +475,14 @@ describe("gradescope", () => {
     expect(await services.sourceSyncs.startDue(60_000)).toBe(1);
     await services.sourceSyncs.whenIdle();
     expect((await db.sourceConnection.findUniqueOrThrow({ where: { id } })).health).not.toBe("ERROR");
+
+    // Unlinking the last course puts it back to "Link a course" instead of keeping the old health.
+    expect((await ada.send("delete", `/api/sources/${id}/course-mappings/10`)).status).toBe(204);
+    expect(await db.sourceConnection.findUniqueOrThrow({ where: { id } })).toMatchObject({
+      state: "MAPPING_REQUIRED",
+      health: "UNKNOWN",
+      healthSummary: "Link a course to start syncing.",
+    });
   });
 
   it("probes a new address through the guarded transport and never repeats what it answered", async () => {

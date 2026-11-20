@@ -9,7 +9,7 @@ import { notify, resolveNotice } from "../../notifications/notify.js";
 import type { Services } from "../../services.js";
 import { reconcileSourceItems } from "../items.js";
 import { clearProviderSession, openProviderSession } from "../providerSessions.js";
-import { MAPPING_REQUIRED, type SessionVerification, type SourceContext, type SourceSyncResult } from "../registry.js";
+import { MAPPING_REQUIRED, MAPPING_SUMMARY, type SessionVerification, type SourceContext, type SourceSyncResult } from "../registry.js";
 import { fetchGradescopeAssignments, parseCourses, type AssignmentBinding, type ProviderFacts } from "./gradescope.js";
 import { decideProviderTask, providerFact, stronglyBoundTask, terminalState, weakTaskCandidates, type ProviderFactRow } from "./taskMatching.js";
 import { ProviderError, ProviderWeb, verifySession, type Provider } from "./web.js";
@@ -110,6 +110,15 @@ export async function mapCourse(db: Db, source: SourceConnection, input: { provi
 
 export async function unmapCourse(db: Db, source: SourceConnection, providerCourseId: string): Promise<void> {
   await db.providerCourseMap.deleteMany({ where: { sourceId: source.id, providerCourseId } });
+  // With no linked course left the source can't sync (the scheduler skips it): say so instead of
+  // keeping the last healthy state.
+  const left = await db.providerCourseMap.count({ where: { sourceId: source.id } });
+  if (left === 0) {
+    await db.sourceConnection.updateMany({
+      where: { id: source.id, userId: source.userId },
+      data: { state: MAPPING_REQUIRED, health: "UNKNOWN", healthSummary: MAPPING_SUMMARY, lastError: null, diagnostics: [] },
+    });
+  }
 }
 
 /** Tasks a Gradescope assignment may stand for: open tasks of the course, not created by a provider. */

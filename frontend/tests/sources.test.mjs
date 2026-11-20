@@ -190,14 +190,14 @@ test("sources styles cover narrow and wide screens, and dark mode through tokens
 
 test("a broker registered for another site is told apart from one for this site", () => {
   const hosted = { origin: "https://example.com", hostname: "example.com" };
-  const health = (backend) => ({ protocol_version: 1, backend_ready: true, version: "0.8.0", backend });
+  const health = (backend) => ({ protocol_version: 1, backend_ready: true, version: "0.8.1", backend });
   assert.equal(model.brokerSite(health("https://example.com/canvaswatcher"), hosted, "/canvaswatcher"), "this");
   assert.equal(model.brokerSite(health("https://example.com/canvaswatcher/"), hosted, "/canvaswatcher"), "this");
   assert.equal(model.brokerSite(health("https://example.com/old-site"), hosted, "/canvaswatcher"), "other");
   assert.equal(model.brokerSite(health("http://127.0.0.1:8000"), hosted, "/canvaswatcher"), "other");
   // Local installs reach the API port directly.
   assert.equal(model.brokerSite(health("http://127.0.0.1:8000"), { origin: "http://localhost:8080", hostname: "localhost" }, ""), "this");
-  // Brokers before 0.8.0 don't report their backend.
+  // Brokers before 0.8.1 don't report their backend.
   assert.equal(model.brokerSite({ protocol_version: 1, backend_ready: true, version: "0.7.0" }, hosted, "/canvaswatcher"), "unknown");
   assert.match(model.brokerInstallCommand(hosted, "/canvaswatcher"), /stop\n.*install --backend https:\/\/example\.com\/canvaswatcher --origin https:\/\/example\.com$/);
   assert.match(model.brokerMessage("AUTH_CHALLENGE_INVALID"), /different CanvasWatcher site/);
@@ -255,7 +255,7 @@ test("a broker that answers but can't serve this site is never shown as not runn
   assert.equal(model.brokerHeadline("incompatible", "unknown"), "Outdated");
   assert.equal(model.brokerReady({ protocol_version: 2, backend_ready: true }), false);
   // Protocol 1 but its backend does not answer: registered elsewhere, or this site is down.
-  const unreachable = (backend) => ({ protocol_version: 1, backend_ready: false, version: "0.8.0", backend });
+  const unreachable = (backend) => ({ protocol_version: 1, backend_ready: false, version: "0.8.1", backend });
   assert.equal(model.brokerStatus(unreachable("https://example.com")), "no-backend");
   assert.equal(model.brokerHeadline("no-backend", model.brokerSite(unreachable("https://example.com"), hosted, "/canvaswatcher")), "Set up for another site");
   assert.equal(model.brokerHeadline("no-backend", model.brokerSite(unreachable("https://example.com/canvaswatcher"), hosted, "/canvaswatcher")), "Can't reach this site");

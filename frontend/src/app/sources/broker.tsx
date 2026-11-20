@@ -302,7 +302,7 @@ export function BrowserSignIn({
 
 /**
  * How to point the broker at this site: stop it, then register it again with this site's address. Shown
- * when the broker serves another site, or is too old (before 0.8.0) to say which site it serves.
+ * when the broker serves another site, or is too old (before 0.8.1) to say which site it serves.
  */
 function BrokerReinstall({ reason, version }: { reason: "other" | "outdated" | "incompatible"; version?: string }) {
   const command = brokerInstallCommand(window.location, PUBLIC_BASE_PATH);
@@ -313,7 +313,7 @@ function BrokerReinstall({ reason, version }: { reason: "other" | "outdated" | "
         {reason === "incompatible"
           ? `Update this broker${named} from auth-broker/ in this release, then register it for this site with the broker's Python (the one in its .venv):`
           : reason === "outdated"
-            ? `This broker${named} is older than 0.8.0 and can't tell which site it serves. If sign-in fails, update it from auth-broker/ in this release and register it for this site:`
+            ? `This broker${named} is older than 0.8.1 and can't tell which site it serves. If sign-in fails, update it from auth-broker/ in this release and register it for this site:`
             : "Register it for this site with the broker's Python (the one in its .venv):"}
       </p>
       <pre className="broker-command">
