@@ -9,7 +9,7 @@ import { notify, resolveNotice } from "../../notifications/notify.js";
 import type { Services } from "../../services.js";
 import { reconcileSourceItems } from "../items.js";
 import { clearProviderSession, openProviderSession } from "../providerSessions.js";
-import type { SessionVerification, SourceContext, SourceSyncResult } from "../registry.js";
+import { MAPPING_REQUIRED, type SessionVerification, type SourceContext, type SourceSyncResult } from "../registry.js";
 import { fetchGradescopeAssignments, parseCourses, type AssignmentBinding, type ProviderFacts } from "./gradescope.js";
 import { decideProviderTask, providerFact, stronglyBoundTask, terminalState, weakTaskCandidates, type ProviderFactRow } from "./taskMatching.js";
 import { ProviderError, ProviderWeb, verifySession, type Provider } from "./web.js";
@@ -93,6 +93,8 @@ export async function mapCourse(db: Db, source: SourceConnection, input: { provi
   if (!course) throw new HttpError(404, "COURSE_NOT_FOUND", "That course could not be found.");
   const existing = await db.providerCourseMap.findUnique({ where: { sourceId_providerCourseId: { sourceId: source.id, providerCourseId: input.provider_course_id } } });
   if (existing) throw new HttpError(409, "PROVIDER_COURSE_ALREADY_MAPPED", "This Gradescope course is already linked. Remove that link first.");
+  // The first linked course makes the source ready to sync again.
+  await db.sourceConnection.updateMany({ where: { id: source.id, userId: source.userId, state: MAPPING_REQUIRED }, data: { state: "READY", healthSummary: null } });
   const map = await db.providerCourseMap.create({
     data: {
       userId: source.userId,
@@ -124,9 +126,9 @@ export async function syncProvider(source: SourceConnection, context: SourceCont
   const cookies = await openProviderSession(db, services.secrets, userId, source.id);
   if (!cookies?.size) return { state: "AUTH_REQUIRED", items_seen: 0, changes: 0, errors: [{ resource: "session", code: "AUTH_REQUIRED", http_status: null }] };
   const maps = await db.providerCourseMap.findMany({ where: { sourceId: source.id } });
-  if (maps.length === 0) {
-    return { state: "READY", items_seen: 0, changes: 0, errors: [{ resource: "courses", code: "PROVIDER_COURSE_MAPPING_REQUIRED", http_status: null }] };
-  }
+  // Nothing to read until a course is linked: a precondition, not a failure (the earlier app answered
+  // PROVIDER_COURSE_MAPPING_REQUIRED without recording a failed sync). The scheduler skips such sources.
+  if (maps.length === 0) return { state: MAPPING_REQUIRED, items_seen: 0, changes: 0, errors: [] };
   const web = new ProviderWeb("gradescope", source.baseUrl, Object.fromEntries(cookies), services.sourceTransport);
   const errors: SourceSyncResult["errors"] = [];
   let seen = 0;

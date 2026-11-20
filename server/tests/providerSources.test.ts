@@ -17,7 +17,7 @@ import {
   type ProviderFactRow,
 } from "../src/sources/provider/taskMatching.js";
 import { authenticatedPage, cookieHeader, providerBase, ProviderWeb, verifySession } from "../src/sources/provider/web.js";
-import { parseScheduleTable } from "../src/sources/website/schedule.js";
+import { chooseSchedule, isSchedulePageUrl, parseScheduleTable } from "../src/sources/website/schedule.js";
 import { fakeSite, type FakeReply } from "./sourcesFakes.js";
 
 const fixture = (name: string) => readFileSync(new URL(`./fixtures/sources/${name}`, import.meta.url), "utf8");
@@ -254,5 +254,30 @@ describe("schedule table", () => {
       expect(parseScheduleTable(SCHEDULE, { week1Monday: anchor, scheduleUrl: URL })).toEqual([]);
     }
     expect(parseScheduleTable("<table><tr><th>Week</th><th>Topic</th></tr></table>", { week1Monday: "2026-08-24", scheduleUrl: URL })).toEqual([]);
+  });
+
+  it("takes deadlines from one schedule page and reports pages that disagree instead of merging them", () => {
+    const SITE = "https://courses.example.edu/test101/fa26";
+    const page = (path: string, html: string) => ({ url: `${SITE}${path}`, finalUrl: `${SITE}${path}`, html });
+    const shifted = SCHEDULE.replaceAll("Thursday", "Friday");
+    const landing = page("/", SCHEDULE);
+    const older = page("/old-term.html", shifted);
+    const same = page("/readings.html", SCHEDULE);
+    // No page named like a schedule: the first one in crawl order (the landing page) decides.
+    const first = chooseSchedule([landing, same, older], "2026-08-24");
+    expect(first.page).toBe(landing);
+    expect(first.rows.find((row) => row.number === 3)?.dueDate).toBe("2026-09-17");
+    // A repeated identical table is no conflict; one with other dates is reported.
+    expect(first.conflicts).toEqual([older]);
+    expect(chooseSchedule([older, landing], "2026-08-24")).toMatchObject({ page: older, conflicts: [landing] });
+    // A schedule page wins over earlier pages, as in the earlier app (…/schedule.html).
+    const named = page("/schedule.html", SCHEDULE);
+    const picked = chooseSchedule([page("/", shifted), named], "2026-08-24");
+    expect(picked.page).toBe(named);
+    expect(picked.rows.find((row) => row.number === 3)?.dueDate).toBe("2026-09-17");
+    expect(picked.conflicts.map((entry) => entry.url)).toEqual([`${SITE}/`]);
+    expect(chooseSchedule([page("/", "<p>no table</p>")], "2026-08-24")).toEqual({ page: null, rows: [], conflicts: [] });
+    expect(isSchedulePageUrl(`${SITE}/schedule`)).toBe(true);
+    expect(isSchedulePageUrl(`${SITE}/old-schedule.html`)).toBe(false);
   });
 });

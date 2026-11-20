@@ -122,6 +122,9 @@ export function filesRouter(db: Db, services: Services): Router {
         res.json({ url: `/api/files/${file.id}/download`, filename: file.displayName });
         return;
       }
+      if (file.integrityStatus === "TOO_LARGE") {
+        throw new HttpError(404, "FILE_TOO_LARGE", "This file is larger than this server stores, so only its details are kept. Open it on the course website.");
+      }
       const blob = file.blobId === null || file.integrityStatus !== "VALID" ? null : await db.websiteBlob.findFirst({ where: { id: file.blobId, userId } });
       if (!blob) throw new HttpError(404, "FILE_UNAVAILABLE", "This website file could not be downloaded. Sync the website and try again.");
       res.set({

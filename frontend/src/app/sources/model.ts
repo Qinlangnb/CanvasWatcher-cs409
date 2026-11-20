@@ -136,7 +136,28 @@ export const SOURCE_TYPE_LABELS: Record<SourceType, string> = {
 
 /** The broker counts as ready only when it speaks protocol 1 and can reach this server. */
 export function brokerReady(health: BrokerHealth | null | undefined): boolean {
-  return health?.protocol_version === 1 && health.backend_ready === true;
+  return brokerStatus(health) === "running";
+}
+
+/**
+ * What the broker's /health says, before comparing sites: nothing answered ("absent"), a broker that
+ * speaks another protocol ("incompatible": update it), one that answers but cannot reach its
+ * CanvasWatcher site ("no-backend"), or one that is up ("running").
+ */
+export type BrokerStatus = "absent" | "incompatible" | "no-backend" | "running";
+
+export function brokerStatus(health: BrokerHealth | null | undefined): BrokerStatus {
+  if (!health || typeof health.protocol_version !== "number") return "absent";
+  if (health.protocol_version !== 1) return "incompatible";
+  return health.backend_ready === true ? "running" : "no-backend";
+}
+
+/** The panel's one-line state for a broker status and the site it serves. */
+export function brokerHeadline(status: BrokerStatus, site: BrokerSite): string {
+  if (status === "absent") return "Not running";
+  if (status === "incompatible") return "Outdated";
+  if (site === "other") return "Set up for another site";
+  return status === "no-backend" ? "Can't reach this site" : "Running";
 }
 
 export const TERMINAL_STATES = new Set(["AUTHENTICATED", "CANCELLED", "FAILED", "TIMED_OUT"]);
@@ -177,7 +198,7 @@ export type Tone = "active" | "neutral" | "warning" | "danger";
 export function sourceTone(state: string): Tone {
   const value = state.replaceAll("_", " ").toUpperCase();
   if (["ACTIVE", "HEALTHY", "VALID", "READY"].includes(value)) return "active";
-  if (["READ ONLY", "COMING SOON", "UNKNOWN"].includes(value)) return "neutral";
+  if (["READ ONLY", "COMING SOON", "UNKNOWN", "MAPPING REQUIRED"].includes(value)) return "neutral";
   if (["DEGRADED", "RESTORED", "AUTH REQUIRED", "PENDING RECONCILIATION", "MISSING", "DISABLED", "VERIFYING", "PENDING"].includes(value)) {
     return "warning";
   }
@@ -217,7 +238,14 @@ export function sourceState(source: SourceConnection, canvas: CanvasAuthStatus |
 
 export function sourceSubtitle(source: SourceConnection, canvas: CanvasAuthStatus | null | undefined): string {
   if (source.source_type === "canvas") return source.enabled ? canvasSubtitle(canvas) : "Turned off";
-  return sourceState(source, canvas).replaceAll("_", " ").toLowerCase().replace(/^./, (c) => c.toUpperCase());
+  const state = sourceState(source, canvas);
+  if (state === "MAPPING_REQUIRED") return "Link a course to start syncing";
+  return state.replaceAll("_", " ").toLowerCase().replace(/^./, (c) => c.toUpperCase());
+}
+
+/** A state as a badge reads it. A provider source without a linked course is waiting, not failing. */
+export function stateLabel(state: string): string {
+  return state === "MAPPING_REQUIRED" ? "Link a course" : state.replaceAll("_", " ");
 }
 
 /** How a source signs in, for the quick panel. */
@@ -266,7 +294,7 @@ export function quickPanelPosition(
 /** Sync feedback in the original's words; a result with errors or a bad state counts as failed. */
 export function syncFeedback(result: { state?: string; errors?: { code?: string }[] } | null, error?: { code?: string; message: string } | null): { ok: boolean; message: string } {
   if (error) return { ok: false, message: error.message };
-  const failedStates = ["FAILED", "DEGRADED", "PARTIAL", "PARTIAL_SUCCESS", "AUTH_REQUIRED"];
+  const failedStates = ["FAILED", "DEGRADED", "PARTIAL", "PARTIAL_SUCCESS", "AUTH_REQUIRED", "MAPPING_REQUIRED"];
   const code = result?.errors?.[0]?.code ?? (result?.state ?? "").toUpperCase();
   if (!result || (!(result.errors?.length) && !failedStates.includes((result.state ?? "").toUpperCase()))) {
     return { ok: true, message: "Sync completed successfully." };
@@ -274,10 +302,13 @@ export function syncFeedback(result: { state?: string; errors?: { code?: string 
   const messages: Record<string, string> = {
     AUTH_REQUIRED: "Sign in again to sync this source.",
     PROVIDER_COURSE_MAPPING_REQUIRED: "Link the discovered courses before syncing.",
+    MAPPING_REQUIRED: "Link a course to start syncing.",
     PROVIDER_TASK_MAPPING_REQUIRED: "Confirm which assignments match your tasks before syncing.",
     PRAIRIELEARN_PARSER_NOT_VERIFIED: "PrairieLearn course pages cannot be read yet.",
     PRAIRIELEARN_COURSE_PARSER_NOT_VERIFIED: "PrairieLearn course pages cannot be read yet.",
     STORAGE_QUOTA_EXCEEDED: "Some website files were not kept: your file storage is full.",
+    FILE_TOO_LARGE: "Some website files are larger than this server stores. They are listed in Files without their contents and checked again in a week.",
+    SCHEDULE_CONFLICT: "Another page has a homework schedule with different dates. Deadlines follow the course's schedule page only.",
     DISCOVERY_LIMIT_REACHED: "The website has more pages than its discovery limit; raise the limit in the website's settings.",
     PERMISSION_DENIED: "The source refused access to some pages.",
   };

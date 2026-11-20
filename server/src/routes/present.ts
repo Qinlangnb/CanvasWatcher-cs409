@@ -184,6 +184,8 @@ export function presentFile(file: CourseFile & { course: CourseSummary }) {
     /** canvas, or website for a file a course website crawl downloaded (and checked). */
     source: file.sourceId ? ("website" as const) : ("canvas" as const),
     integrity_status: file.integrityStatus,
+    /** Where a website file too large to store can still be opened. */
+    source_url: file.integrityStatus === "TOO_LARGE" ? file.sourceUrl : null,
   };
 }
 

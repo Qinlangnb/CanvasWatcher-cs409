@@ -464,6 +464,15 @@ function DownloadButton({ file }: { file: CourseFile }) {
     </>
   );
   if (preview) return <UnavailableButton className="button small secondary">{label}</UnavailableButton>;
+  // Too large to store here: only its details are kept, so it opens on the course website instead.
+  if (file.integrity_status === "TOO_LARGE") {
+    return file.source_url && /^https?:\/\//i.test(file.source_url) ? (
+      <a className="button small secondary" href={file.source_url} target="_blank" rel="noreferrer">
+        Open on website
+        <span className="visually-hidden"> {file.name}</span>
+      </a>
+    ) : null;
+  }
   return (
     <a className="button small secondary" href={apiHref(file.download_url)} target="_blank" rel="noreferrer">
       {label}
@@ -498,6 +507,7 @@ export function FileTable({ files, showCourse = true }: { files: CourseFile[]; s
                   {/* Course-website files are kept here; one that came back as a sign-in page can't be downloaded. */}
                   {file.source === "website" ? " · Website" : ""}
                   {file.integrity_status === "INVALID_DOWNLOAD" ? " · not a valid download" : ""}
+                  {file.integrity_status === "TOO_LARGE" ? " · too large to store" : ""}
                 </span>
               </span>
             </th>

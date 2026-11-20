@@ -26,12 +26,16 @@ import {
 } from "./credentials.js";
 import { probeWebsite, ResourceFetcher, WebsiteProbeError, type WebsiteProbeResult } from "./fetcher.js";
 import { normalizedHttpUrl, normalizedProbeUrl, protectedPrefix, websiteNtlmScope } from "./scope.js";
-import { parseScheduleTable } from "./schedule.js";
+import { chooseSchedule, isSchedulePageUrl } from "./schedule.js";
 import { isWebsiteCourse, withWebsiteSources } from "./syllabus.js";
 
 const MAX_PAGE_TEXT = 50_000;
 const MAX_BLOCK_CHARS = 200_000;
 const MAX_PENDING_SEEDS = 200;
+/** A file too large to store is fetched again only after this long (or once it leaves the site). */
+export const OVERSIZED_RECHECK_MS = 7 * 24 * 60 * 60_000;
+/** pending_resources.state of such a file: not retried as a seed, not listed as pending. */
+const TOO_LARGE = "TOO_LARGE";
 /** Unlinked bytes younger than this may belong to a sync still running; they are pruned later. */
 export const BLOB_GRACE_MS = 10 * 60_000;
 
@@ -365,6 +369,10 @@ export async function syncWebsite(connection: SourceConnection, context: SourceC
     orderBy: { lastAttemptAt: "asc" },
     take: MAX_PENDING_SEEDS,
   });
+  const recentlyTooLarge = await db.pendingResource.findMany({
+    where: { sourceId: connection.id, state: TOO_LARGE, lastAttemptAt: { gt: new Date(Date.now() - OVERSIZED_RECHECK_MS) } },
+    select: { url: true },
+  });
   const fetcher = new ResourceFetcher({
     transport: services.sourceTransport,
     credentials: (id) => (id === connection.id ? credential : null),
@@ -379,6 +387,7 @@ export async function syncWebsite(connection: SourceConnection, context: SourceC
         authRules: scope ? [{ pathPrefix: scope, credentialId: connection.id }] : [],
         pathLimit: config.discovery_path_limit,
         retryUrls: pendingRows.map((row) => row.url),
+        skipUrls: recentlyTooLarge.map((row) => row.url),
       },
       fetcher,
     );
@@ -391,20 +400,29 @@ export async function syncWebsite(connection: SourceConnection, context: SourceC
   const itemScope: ItemScope = { userId, courseId: course.id, sourceId: connection.id, baseline, now };
   const complete = crawl.health === "HEALTHY";
   const pendingUrls = new Set(crawl.pending.map((row) => row.url));
+  // Files over the size limit, found now or skipped as known: listed, never stored, never "removed".
+  const oversized = crawl.files.filter((file) => file.integrity.status === "TOO_LARGE");
+  const oversizedUrls = new Set([...oversized.map((file) => file.url), ...crawl.skipped]);
   const zone = (await getSettings(db, userId)).timeZone;
 
   // Bytes go in first, each in its own short transaction: they are deduplicated by hash and harmless if unused.
   const blobIds = new Map<string, number>();
   for (const file of crawl.files) {
-    if (!file.content || !file.integrity.valid) continue;
+    if (!file.content || !file.sha256 || !file.integrity.valid) continue;
     const id = await storeWebsiteBlob(db, userId, file.sha256, file.content, services.websiteLimits);
     if (id === null) errors.push({ resource: "website_file", code: "storage_quota_exceeded", http_status: null });
     else blobIds.set(file.url, id);
   }
 
-  const schedule = config.week_1_monday
-    ? crawl.pages.flatMap((page) => parseScheduleTable(page.html, { week1Monday: config.week_1_monday as string, scheduleUrl: page.finalUrl }).map((row) => ({ row, page })))
-    : [];
+  // One page defines the homework deadlines (a schedule page, else the first page with the table); a
+  // schedule page that could not be read this time leaves the deadlines as they are.
+  const scheduleUnread = crawl.pending.some((row) => row.itemType === "website_page" && isSchedulePageUrl(row.url));
+  const choice = config.week_1_monday && !scheduleUnread ? chooseSchedule(crawl.pages, config.week_1_monday) : null;
+  const schedulePage = choice?.page ?? null;
+  const schedule = schedulePage ? (choice?.rows ?? []).map((row) => ({ row, page: schedulePage })) : [];
+  for (const page of choice?.conflicts ?? []) {
+    errors.push({ resource: `website_schedule ${page.url}`, code: "schedule_conflict", http_status: null });
+  }
 
   const changes = await db.$transaction(
     async (tx) => {
@@ -460,10 +478,12 @@ export async function syncWebsite(connection: SourceConnection, context: SourceC
       const fileUrls = new Set(crawl.files.map((file) => file.url));
       if (complete) {
         await tx.courseFile.updateMany({
-          where: { sourceId: connection.id, removedAt: null, sourceUrl: { notIn: [...fileUrls] } },
+          where: { sourceId: connection.id, removedAt: null, sourceUrl: { notIn: [...fileUrls, ...crawl.skipped] } },
           // A removed file's bytes are let go, so they stop counting against the quota.
           data: { removedAt: now, blobId: null },
         });
+        // A too-large file that left the site is fetched again if it comes back.
+        await tx.pendingResource.deleteMany({ where: { sourceId: connection.id, state: TOO_LARGE, url: { notIn: [...fileUrls, ...crawl.skipped] } } });
       }
       total += await reconcileSourceItems(
         tx,
@@ -478,7 +498,7 @@ export async function syncWebsite(connection: SourceConnection, context: SourceC
             htmlUrl: file.url,
             content: { name: file.filename, size: file.size, content_type: file.contentType, sha256: file.sha256 },
           })),
-        (key) => complete && !pendingUrls.has(key.slice(connection.id.length + 1)),
+        (key) => complete && !pendingUrls.has(key.slice(connection.id.length + 1)) && !oversizedUrls.has(key.slice(connection.id.length + 1)),
       );
 
       // Pending resources: retried as seeds next time; fetched ones are marked done.
@@ -495,6 +515,15 @@ export async function syncWebsite(connection: SourceConnection, context: SourceC
         await tx.pendingResource.updateMany({
           where: { sourceId: connection.id, url: { in: fetched } },
           data: { state: "FETCHED", lastErrorCode: null, lastAttemptAt: now },
+        });
+      }
+      // Remembered so the next syncs list them without downloading them again (OVERSIZED_RECHECK_MS).
+      for (const file of oversized) {
+        const data = { title: file.title.slice(0, 500), itemType: "website_file", state: TOO_LARGE, lastErrorCode: "file_too_large", lastAttemptAt: now };
+        await tx.pendingResource.upsert({
+          where: { sourceId_url: { sourceId: connection.id, url: file.url } },
+          create: { userId, sourceId: connection.id, url: file.url, ...data },
+          update: data,
         });
       }
 

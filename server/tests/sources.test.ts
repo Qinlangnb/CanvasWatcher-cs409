@@ -1,11 +1,11 @@
 import { readFileSync } from "node:fs";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mergeSetCookies } from "../src/canvas/client.js";
 import { endOfDay, expiration } from "../src/canvas/credentials.js";
 import { parseSessionImport, shellSplit } from "../src/canvas/sessionImport.js";
 import { registerSourceAdapter, sourceAdapter, unregisterSourceAdapter } from "../src/sources/registry.js";
 import { CANVAS_ORIGIN, CANVAS_SESSION, CANVAS_TOKEN, fakeCanvas, seedCourse } from "./fakeCanvas.js";
-import { connectCanvas, db, resetDatabase, services, signUp, syncNow, type Browser } from "./helpers.js";
+import { config, connectCanvas, db, resetDatabase, services, signUp, syncNow, type Browser } from "./helpers.js";
 
 beforeEach(async () => {
   await resetDatabase();
@@ -354,6 +354,58 @@ describe("sources", () => {
     const unknown = await ada.send("patch", `/api/sources/${canvas.id}`, { body: { base_url: "https://elsewhere.example.org" } });
     expect(unknown.status).toBe(422);
     expect((await ada.send("get", "/api/sources")).body[0].base_url).toBe(CANVAS_ORIGIN);
+  });
+
+  describe("moving Canvas to another address", () => {
+    const OTHER = "https://canvas-two.example.edu";
+    const credentials = services.credentials as { fetchImpl: typeof fetch };
+    const realFetch = credentials.fetchImpl;
+    let probes: string[];
+    let probeStatus: number;
+    beforeEach(() => {
+      config.canvasAllowedHosts.push(new URL(OTHER).hostname);
+      probes = [];
+      probeStatus = 200;
+      credentials.fetchImpl = (async (input: string | URL | Request) => {
+        probes.push(String(input));
+        return new Response("", { status: probeStatus });
+      }) as typeof fetch;
+    });
+    afterEach(() => {
+      config.canvasAllowedHosts.pop();
+      credentials.fetchImpl = realFetch;
+    });
+
+    it("refuses a different site while an account is signed in, and keeps sign-in and the fallback note", async () => {
+      const ada = await signUp();
+      await connectCanvas(ada);
+      const fallback = { from: "pat", to: "browser_session", reason_code: "PAT_INVALID", at: "2026-11-01T00:00:00.000Z" };
+      await db.canvasConnection.updateMany({ data: { fallback } });
+      const [canvas] = (await ada.send("get", "/api/sources")).body;
+      const moved = await ada.send("patch", `/api/sources/${canvas.id}`, { body: { base_url: OTHER } });
+      expect(moved.status).toBe(422);
+      expect(moved.body.detail).toEqual([{ loc: ["body", "base_url"], msg: expect.stringMatching(/Disconnect and delete data/) }]);
+      // Nothing was probed, signed out or rebound: the account, its site and its note stay together.
+      expect(probes).toEqual([]);
+      const after = await status(ada);
+      expect(after).toMatchObject({ base_url: CANVAS_ORIGIN, connection_state: "ACTIVE", fallback });
+      expect((await ada.send("get", "/api/sources")).body[0]).toMatchObject({ base_url: CANVAS_ORIGIN });
+    });
+
+    it("moves a Canvas source nobody signed in to yet, after probing it without repeating its answer", async () => {
+      const ada = await signUp();
+      const created = (await ada.send("post", "/api/sources/canvas", { body: { base_url: CANVAS_ORIGIN } })).body;
+      probeStatus = 404;
+      const failed = await ada.send("patch", `/api/sources/${created.id}`, { body: { base_url: OTHER } });
+      expect(failed.status).toBe(422);
+      expect(JSON.stringify(failed.body)).not.toContain("404");
+      probeStatus = 200;
+      const moved = await ada.send("patch", `/api/sources/${created.id}`, { body: { base_url: OTHER } });
+      expect(moved.status).toBe(200);
+      expect(moved.body).toMatchObject({ base_url: OTHER, state: "AUTH_REQUIRED" });
+      expect(probes).toEqual([`${OTHER}/`, `${OTHER}/`]);
+      expect((await status(ada)).fallback).toBeNull();
+    });
   });
 
   it("keeps each user's sources apart", async () => {

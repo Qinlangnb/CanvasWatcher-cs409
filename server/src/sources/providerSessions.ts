@@ -1,6 +1,7 @@
 import type { Db } from "../db.js";
 import type { Prisma } from "../generated/prisma/client.js";
 import type { SecretBox } from "../security/secretBox.js";
+import { MAPPING_REQUIRED, MAPPING_SUMMARY } from "./registry.js";
 
 // Gradescope / PrairieLearn cookie jars captured by the Auth Broker. Sealed per connection, so a jar
 // cannot be moved to another user or connection; every change bumps the generation.
@@ -30,7 +31,13 @@ export async function storeProviderSession(
     failureReason: null,
   };
   await tx.providerSession.upsert({ where: { connectionId }, create: { connectionId, userId, ...fields }, update: fields });
-  await tx.sourceConnection.updateMany({ where: { id: connectionId, userId }, data: { state: "READY" } });
+  // Signed in, but a Gradescope source reads only linked courses: until one is linked it waits for that.
+  const source = await tx.sourceConnection.findFirst({ where: { id: connectionId, userId }, select: { type: true, _count: { select: { providerMaps: true } } } });
+  const unlinked = source?.type === "GRADESCOPE" && source._count.providerMaps === 0;
+  await tx.sourceConnection.updateMany({
+    where: { id: connectionId, userId },
+    data: unlinked ? { state: MAPPING_REQUIRED, healthSummary: MAPPING_SUMMARY } : { state: "READY" },
+  });
   return true;
 }
 

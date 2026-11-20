@@ -133,3 +133,45 @@ export function parseScheduleTable(html: string | Buffer, options: ScheduleOptio
   }
   return [...homework.values()].sort((a, b) => a.number - b.number);
 }
+
+/** A page whose path is a schedule page (`.../schedule.html`, `.../schedule`), as the earlier app anchored it. */
+export function isSchedulePageUrl(url: string): boolean {
+  try {
+    return /\/schedule(?:\.html?)?$/i.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
+export interface ScheduleChoice<P> {
+  /** The one page whose table defines the deadlines; null when no page has one. */
+  page: P | null;
+  rows: ScheduleHomework[];
+  /** Other pages whose table gives a homework another date: reported, never applied. */
+  conflicts: P[];
+}
+
+/**
+ * Picks the schedule page among crawled pages: a page named like a schedule page, else the first page
+ * (crawl order, so the landing page first) with a homework table. Only that page sets deadlines, so a
+ * still-linked older term or a repeated table elsewhere can't overwrite them; pages that disagree with
+ * it are returned as conflicts.
+ */
+export function chooseSchedule<P extends { url: string; finalUrl: string; html: string }>(pages: P[], week1Monday: string): ScheduleChoice<P> {
+  const parsed = pages
+    .map((page) => ({ page, rows: parseScheduleTable(page.html, { week1Monday, scheduleUrl: page.finalUrl }) }))
+    .filter((entry) => entry.rows.length > 0);
+  const chosen = parsed.find((entry) => isSchedulePageUrl(entry.page.finalUrl) || isSchedulePageUrl(entry.page.url)) ?? parsed[0];
+  if (!chosen) return { page: null, rows: [], conflicts: [] };
+  const byNumber = new Map(chosen.rows.map((row) => [row.number, row]));
+  const conflicts = parsed
+    .filter((entry) => entry !== chosen)
+    .filter((entry) =>
+      entry.rows.some((row) => {
+        const kept = byNumber.get(row.number);
+        return kept !== undefined && (kept.dueDate !== row.dueDate || kept.assignedDate !== row.assignedDate);
+      }),
+    )
+    .map((entry) => entry.page);
+  return { page: chosen.page, rows: chosen.rows, conflicts };
+}

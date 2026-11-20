@@ -92,6 +92,19 @@ describe("Auth Broker", () => {
     expect((await broker("complete", { ...ident(ticket), exchange_token: claim.body.exchange_token, cookies: {} })).status).toBe(409);
   });
 
+  it("refuses a claim from a broker that serves another CanvasWatcher instance", async () => {
+    const ada = await signUp();
+    await connectCanvas(ada);
+    const ticket = await challenge(ada);
+    // Another server's instance id, of the same length: what a broker registered for another site sends.
+    const foreign = [...ticket.instance_id].map((c) => (c === "a" ? "b" : "a")).join("");
+    const res = await broker("claim", { ...ident(ticket), instance_id: foreign, one_time_token: ticket.one_time_token });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("AUTH_CHALLENGE_INVALID");
+    // The ticket is still unclaimed: the broker for this site can take it.
+    expect((await broker("claim", { ...ident(ticket), one_time_token: ticket.one_time_token })).status).toBe(200);
+  });
+
   it("signs in a new user's Canvas with the browser alone", async () => {
     seedCourse(fakeCanvas);
     const ada = await signUp();
@@ -213,6 +226,7 @@ describe("Auth Broker", () => {
     expect(row).toMatchObject({ state: "VALID", generation: 1 });
     expect(row.cookieCiphertext).not.toContain("good");
     const [listed] = (await ada.send("get", "/api/sources")).body;
-    expect(listed).toMatchObject({ source_type: "gradescope", state: "READY", supported: true, session: { present: true, state: "VALID" } });
+    // Signed in; with no linked course yet it asks for one (not "Ready", which the scheduler would never sync).
+    expect(listed).toMatchObject({ source_type: "gradescope", state: "MAPPING_REQUIRED", supported: true, session: { present: true, state: "VALID" } });
   });
 });

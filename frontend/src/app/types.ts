@@ -144,8 +144,13 @@ export interface CourseFile {
   user_override_type: FileType | null;
   /** canvas, or website for a file a course-website sync downloaded and checked. */
   source?: "canvas" | "website";
-  /** Website files: VALID, or INVALID_DOWNLOAD when the site sent something else (a sign-in page). */
+  /**
+   * Website files: VALID, INVALID_DOWNLOAD when the site sent something else (a sign-in page), or
+   * TOO_LARGE when the file is over the server's size limit and only its details are kept.
+   */
   integrity_status?: string | null;
+  /** Where a TOO_LARGE website file can still be opened. */
+  source_url?: string | null;
 }
 
 export interface TaskAttachment {

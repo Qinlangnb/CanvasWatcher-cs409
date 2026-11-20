@@ -7,7 +7,7 @@ import type { Prisma, SourceConnection } from "../generated/prisma/client.js";
 import { HttpError } from "../http/errors.js";
 import type { Services } from "../services.js";
 import { HEALTH_SUMMARIES } from "../sync/service.js";
-import { sourceAdapter, type SourceSyncResult } from "./registry.js";
+import { MAPPING_REQUIRED, MAPPING_SUMMARY, sourceAdapter, type SourceSyncResult } from "./registry.js";
 
 /** Most scheduled source syncs at once. */
 const SCHEDULED_CONCURRENCY = 2;
@@ -46,6 +46,14 @@ export class SourceSyncs {
   }
 
   private async record(source: SourceConnection, result: SourceSyncResult): Promise<void> {
+    if (result.state === MAPPING_REQUIRED) {
+      // Not a failure: nothing was read, and nothing that was read before is called unhealthy.
+      await this.db.sourceConnection.updateMany({
+        where: { id: source.id, userId: source.userId },
+        data: { state: MAPPING_REQUIRED, lastSyncAt: new Date(), lastError: null, health: "UNKNOWN", healthSummary: MAPPING_SUMMARY, diagnostics: [] },
+      });
+      return;
+    }
     const failed = result.errors.length > 0;
     const health =
       result.state === "AUTH_REQUIRED" ? "AUTH_REQUIRED" : result.state === "ERROR" ? "ERROR" : failed ? (result.items_seen > 0 ? "DEGRADED" : "ERROR") : "HEALTHY";
@@ -76,6 +84,8 @@ export class SourceSyncs {
         enabled: true,
         user: { previewExpiresAt: null },
         OR: [{ lastSyncAt: null }, { lastSyncAt: { lt: new Date(Date.now() - intervalMs) } }],
+        // A provider source reads only linked courses: without one there is nothing to sync.
+        AND: [{ OR: [{ type: "WEBSITE" }, { providerMaps: { some: {} } }] }],
         id: { notIn: [...this.running] },
       },
       orderBy: { lastSyncAt: { sort: "asc", nulls: "first" } },

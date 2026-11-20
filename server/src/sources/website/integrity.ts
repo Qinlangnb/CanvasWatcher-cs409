@@ -15,7 +15,8 @@ export const MIME_EXTENSIONS: Record<string, string> = {
   "application/zip": ".zip",
 };
 
-export type IntegrityStatus = "VALID" | "INVALID_DOWNLOAD";
+/** TOO_LARGE: over WEBSITE_MAX_FILE_MB, so listed with its details and never stored. */
+export type IntegrityStatus = "VALID" | "INVALID_DOWNLOAD" | "TOO_LARGE";
 
 export interface IntegrityResult {
   valid: boolean;

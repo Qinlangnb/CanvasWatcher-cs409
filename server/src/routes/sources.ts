@@ -11,6 +11,7 @@ import { FieldError, HttpError } from "../http/errors.js";
 import { isPreview, previewUnavailable } from "../preview/accounts.js";
 import type { Services } from "../services.js";
 import { sourceAdapter } from "../sources/registry.js";
+import { TransportError } from "../sources/website/http.js";
 import { BLOB_GRACE_MS, pruneWebsiteBlobs } from "../sources/website/service.js";
 import { disconnectCanvas } from "./canvas.js";
 import { presentRun } from "./present.js";
@@ -89,19 +90,52 @@ function canvasBase(config: Config, input: string): string {
   }
 }
 
-/** A new address must answer before it replaces a working one: below 400, or 401/403 (sign-in needed). */
-async function probeAddress(services: Services, baseUrl: string): Promise<void> {
+const PROBE_TIMEOUT_MS = 10_000;
+/** A probe only needs the status line; a page larger than this still counts as an answer. */
+const PROBE_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * A new address must answer before it replaces a working one: below 400, or 401/403 (sign-in needed).
+ * The messages never repeat what the address answered, so the probe tells nothing about other hosts.
+ */
+function probeVerdict(status: number): void {
+  if (status >= 400 && status !== 401 && status !== 403) {
+    throw new FieldError("base_url", "That address answered with an error. The current address was kept.");
+  }
+}
+
+/** Canvas: the address is already on CANVAS_ALLOWED_HOSTS, and Canvas is reached with the Canvas fetch. */
+async function probeCanvasAddress(services: Services, baseUrl: string): Promise<void> {
   let status: number;
   try {
-    const response = await services.credentials.fetchImpl(`${baseUrl}/`, { redirect: "manual", signal: AbortSignal.timeout(10_000) });
+    const response = await services.credentials.fetchImpl(`${baseUrl}/`, { redirect: "manual", signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
     status = response.status;
     await response.body?.cancel().catch(() => {});
   } catch {
     throw new FieldError("base_url", "That address did not answer. The current address was kept.");
   }
-  if (status >= 400 && status !== 401 && status !== 403) {
-    throw new FieldError("base_url", `That address answered with an error (${status}). The current address was kept.`);
+  probeVerdict(status);
+}
+
+/**
+ * Gradescope / PrairieLearn: the user typed this address, so it is probed through the source transport,
+ * which refuses private, loopback and link-local targets unless SOURCES_ALLOW_PRIVATE_HOSTS is true.
+ */
+async function probeSourceAddress(services: Services, baseUrl: string): Promise<void> {
+  const connection = services.sourceTransport.open({ maxSockets: 1 });
+  let status: number;
+  try {
+    status = (await connection.get(`${baseUrl}/`, {}, { timeoutMs: PROBE_TIMEOUT_MS, maxBytes: PROBE_MAX_BYTES })).status;
+  } catch (error) {
+    if (error instanceof TransportError && error.code === "response_too_large") return;
+    if (error instanceof TransportError && (error.code === "address_not_allowed" || error.code === "unsupported_scheme")) {
+      throw new FieldError("base_url", "That address can't be used for a source. The current address was kept.");
+    }
+    throw new FieldError("base_url", "That address did not answer. The current address was kept.");
+  } finally {
+    connection.close();
   }
+  probeVerdict(status);
 }
 
 async function ownCourse(db: Db, userId: string, courseId: number | null | undefined): Promise<number | null> {
@@ -211,12 +245,21 @@ export function sourcesRouter(db: Db, config: Config, services: Services): Route
       if (body.base_url !== undefined) {
         const baseUrl = canvasBase(config, body.base_url);
         if (baseUrl !== source.baseUrl) {
-          await probeAddress(services, baseUrl);
-          // Every credential belongs to the old site: they are signed out, the account id stays bound.
+          // The signed-in account is bound to its Canvas site (as in the earlier app): a credential from
+          // another site never matches it, so moving a bound source would leave no way to sign in again.
+          // A different site starts over: Disconnect and delete data, then add Canvas with the new address.
+          if (await db.canvasConnection.findUnique({ where: { userId }, select: { userId: true } })) {
+            throw new FieldError(
+              "base_url",
+              "Canvas is signed in to an account on the current site, so its address can't change. To use a different Canvas site, " +
+                "use Disconnect and delete data (Settings → Sources → Canvas), then add Canvas again with the new address.",
+            );
+          }
+          await probeCanvasAddress(services, baseUrl);
+          // Nothing is signed in yet; any leftover slot belonged to the old address.
           for (const method of METHODS) {
             await services.credentials.remove(userId, method, { state: "MISSING", reason: "BASE_URL_CHANGED" });
           }
-          await db.canvasConnection.updateMany({ where: { userId }, data: { baseUrl, status: "TOKEN_REJECTED", fallback: undefined } });
           data.baseUrl = baseUrl;
           data.state = "AUTH_REQUIRED";
         }
@@ -233,7 +276,7 @@ export function sourcesRouter(db: Db, config: Config, services: Services): Route
       if (adapter && body.base_url !== undefined) {
         const baseUrl = adapter.normalizeBaseUrl(body.base_url);
         if (baseUrl !== source.baseUrl) {
-          await probeAddress(services, baseUrl);
+          await probeSourceAddress(services, baseUrl);
           data.baseUrl = baseUrl;
         }
       }

@@ -29,6 +29,11 @@ export interface FetchResult {
   authScheme: AuthScheme | null;
   authenticated: boolean;
   error: string | null;
+  /**
+   * A 2xx answer whose body is over the size limit: status "ok", no content, the size (at least the
+   * limit when the server did not declare one) in `contentLength`. Listed as a file, never stored.
+   */
+  tooLarge?: boolean;
 }
 
 export interface AuthRule {
@@ -65,6 +70,14 @@ function failure(url: string, error: string, extra: Partial<FetchResult> = {}): 
     error,
     ...extra,
   };
+}
+
+/** A 2xx response cut off at `maxBytes`, as a body-less "ok" result; anything else stays a failure. */
+function oversizedResult(error: TransportError, limits: RequestLimits, authenticated: boolean): FetchResult | null {
+  const response = error.response;
+  if (error.code !== "response_too_large" || !response || response.status < 200 || response.status >= 300) return null;
+  const result = statusResult({ url: response.url, status: response.status, headers: response.headers, body: Buffer.alloc(0) }, authenticated);
+  return { ...result, content: null, contentLength: response.declaredBytes ?? limits.maxBytes + 1, error: "response_too_large", tooLarge: true };
 }
 
 export function statusResult(response: RawResponse, authenticated: boolean): FetchResult {
@@ -173,7 +186,8 @@ export class ResourceFetcher {
       try {
         response = await this.anonymous.get(current, {}, limits);
       } catch (error) {
-        return failure(current, error instanceof TransportError ? error.code : "http_client_error");
+        if (error instanceof TransportError) return oversizedResult(error, limits, false) ?? failure(current, error.code);
+        return failure(current, "http_client_error");
       }
       const location = header(response.headers, "location");
       if (response.status < 300 || response.status >= 400 || response.status === 304 || !location) {
@@ -233,6 +247,8 @@ export class ResourceFetcher {
         } catch (error) {
           // A broken handshake leaves the socket in an unknown auth state; start over next time.
           if (this.pool.get(credentialId) === entry) this.invalidate(credentialId);
+          const oversized = error instanceof TransportError ? oversizedResult(error, limits, true) : null;
+          if (oversized) return oversized;
           return failure(url, error instanceof TransportError ? error.code : "ntlm_handshake_failed", {
             authenticated: true,
           });

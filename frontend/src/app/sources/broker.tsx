@@ -5,10 +5,13 @@ import { PUBLIC_BASE_PATH } from "../../publicPath";
 import { UnavailableButton } from "../preview";
 import { Badge, Dialog, Spinner } from "../ui";
 import {
+  brokerHeadline,
   brokerInstallCommand,
   brokerMessage,
   brokerReady,
   brokerSite,
+  brokerStatus,
+  type BrokerStatus,
   SOURCE_TYPE_LABELS,
   TERMINAL_STATES,
   type BrokerTicket,
@@ -27,15 +30,17 @@ export function useBroker() {
   const config = useBrokerConfig();
   const url = config.data?.broker_url;
   const health = useBrokerHealth(url);
-  const running = !health.isError && brokerReady(health.data);
-  const site = running ? brokerSite(health.data, window.location, PUBLIC_BASE_PATH) : "unknown";
+  // A broker that answers with another protocol, or can't reach its site, is not "Not running".
+  const status: BrokerStatus = health.isError ? "absent" : brokerStatus(health.data);
+  const running = status === "running";
+  const site = running || status === "no-backend" ? brokerSite(health.data, window.location, PUBLIC_BASE_PATH) : "unknown";
   // A broker registered for another site would take the ticket and then fail to claim it.
-  return { url, health, running, site, ready: running && site !== "other" };
+  return { url, health, status, running, site, ready: running && site !== "other" };
 }
 
 /** Settings → Sources: whether the desktop broker runs, with Start and Check. */
 export function AuthBrokerPanel() {
-  const { url, health, ready, running, site } = useBroker();
+  const { url, health, ready, status, site } = useBroker();
   const locked = useSourcesLocked();
   const [launching, setLaunching] = useState(false);
   const [message, setMessage] = useState<{ text: string; alert?: boolean } | null>(null);
@@ -75,15 +80,25 @@ export function AuthBrokerPanel() {
     <section className="broker-panel" aria-labelledby="broker-heading">
       <div className="broker-panel-head">
         <h3 id="broker-heading">
-          Local Auth Broker · <span className={ready ? "broker-running" : "broker-stopped"}>{ready ? "Running" : running ? "Set up for another site" : "Not running"}</span>
+          Local Auth Broker · <span className={ready ? "broker-running" : "broker-stopped"}>{brokerHeadline(status, site)}</span>
         </h3>
         <span className={`status-dot ${ready ? "ok" : "warn"}`} aria-hidden="true" />
       </div>
       {ready ? (
         <p className="muted">Browser sign-in is available. Passwords and MFA stay on the official sign-in pages.</p>
-      ) : running ? (
+      ) : status === "incompatible" ? (
+        <p className="muted">
+          A Local Auth Broker answers on this computer, but it speaks protocol version {health.data?.protocol_version} and this site needs
+          version 1, so sign-in here would fail.
+        </p>
+      ) : site === "other" ? (
         <p className="muted">
           The broker on this computer hands sessions to {health.data?.backend ?? "another site"}, not to this site, so sign-in here would fail.
+        </p>
+      ) : status === "no-backend" ? (
+        <p className="muted">
+          The broker runs on this computer but can't reach {health.data?.backend ?? "its CanvasWatcher site"} right now. Check that this site
+          is up, then use Check broker.
         </p>
       ) : (
         <p className="muted">
@@ -91,7 +106,11 @@ export function AuthBrokerPanel() {
           registered for this site.
         </p>
       )}
-      {running && site !== "this" ? <BrokerReinstall outdated={site === "unknown"} version={health.data?.version} /> : null}
+      {status === "incompatible" ? (
+        <BrokerReinstall reason="incompatible" version={health.data?.version} />
+      ) : status !== "absent" && site !== "this" ? (
+        <BrokerReinstall reason={site === "other" ? "other" : "outdated"} version={health.data?.version} />
+      ) : null}
       {message ? (
         <p className={message.alert ? "form-error" : "inline-note"} role={message.alert ? "alert" : "status"}>
           {message.text}
@@ -285,14 +304,17 @@ export function BrowserSignIn({
  * How to point the broker at this site: stop it, then register it again with this site's address. Shown
  * when the broker serves another site, or is too old (before 0.8.0) to say which site it serves.
  */
-function BrokerReinstall({ outdated, version }: { outdated: boolean; version?: string }) {
+function BrokerReinstall({ reason, version }: { reason: "other" | "outdated" | "incompatible"; version?: string }) {
   const command = brokerInstallCommand(window.location, PUBLIC_BASE_PATH);
+  const named = version ? ` (version ${version})` : "";
   return (
     <div className="broker-reinstall">
       <p className="inline-note">
-        {outdated
-          ? `This broker${version ? ` (version ${version})` : ""} is older than 0.8.0 and can't tell which site it serves. If sign-in fails, update it from auth-broker/ in this release and register it for this site:`
-          : "Register it for this site with the broker's Python (the one in its .venv):"}
+        {reason === "incompatible"
+          ? `Update this broker${named} from auth-broker/ in this release, then register it for this site with the broker's Python (the one in its .venv):`
+          : reason === "outdated"
+            ? `This broker${named} is older than 0.8.0 and can't tell which site it serves. If sign-in fails, update it from auth-broker/ in this release and register it for this site:`
+            : "Register it for this site with the broker's Python (the one in its .venv):"}
       </p>
       <pre className="broker-command">
         <code>{command}</code>
@@ -303,6 +325,7 @@ function BrokerReinstall({ outdated, version }: { outdated: boolean; version?: s
 
 /** A small "Running / Not running" badge for places without the whole panel. */
 export function BrokerBadge() {
-  const { ready } = useBroker();
-  return <Badge tone={ready ? "success" : "warning"}>{ready ? "Broker running" : "Broker not running"}</Badge>;
+  const { ready, status, site } = useBroker();
+  const headline = brokerHeadline(status, site);
+  return <Badge tone={ready ? "success" : "warning"}>{ready ? "Broker running" : `Broker: ${headline.toLowerCase()}`}</Badge>;
 }

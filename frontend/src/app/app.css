@@ -390,6 +390,16 @@ textarea {
   padding: 8px 12px;
 }
 
+/* A value that can't change here (for example a signed-in Canvas site's address). */
+.input-box:has(input[readonly]) {
+  background: var(--surface-2);
+}
+
+.input-box input[readonly] {
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
 .form-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));

@@ -50,6 +50,42 @@ const ADD = {
   ntlm: ACCOUNT,
 };
 
+/** A ZIP with stored (uncompressed) entries: enough of a .docx for documents.ts. */
+function storedZip(entries: Record<string, string>): Buffer {
+  const parts: Buffer[] = [];
+  const directory: Buffer[] = [];
+  let offset = 0;
+  for (const [name, text] of Object.entries(entries)) {
+    const data = Buffer.from(text, "utf8");
+    const fileName = Buffer.from(name, "utf8");
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(fileName.length, 26);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(fileName.length, 28);
+    central.writeUInt32LE(offset, 42);
+    parts.push(local, fileName, data);
+    directory.push(central, fileName);
+    offset += 30 + fileName.length + data.length;
+  }
+  const centralDirectory = Buffer.concat(directory);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(Object.keys(entries).length, 8);
+  end.writeUInt16LE(Object.keys(entries).length, 10);
+  end.writeUInt32LE(centralDirectory.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...parts, centralDirectory, end]);
+}
+
 async function addWebsite(browser: Browser, body: Record<string, unknown> = ADD) {
   const res = await browser.send("post", "/api/sources/website", { body });
   expect(res.status).toBe(201);
@@ -187,6 +223,52 @@ describe("course websites", () => {
     expect((await bob.send("get", `/api/files/${file.id}/download`)).status).toBe(404);
   });
 
+  it("lists a file over WEBSITE_MAX_FILE_MB without its bytes and doesn't download it again on every sync", async () => {
+    const ada = await signUp();
+    const big = `${BASE}/recording.pdf`;
+    pages[`${BASE}/`] = html(`${fixture("public_schedule.html")}<a href="recording.pdf">Lecture recording</a>`);
+    pages[big] = { status: 200, headers: { "content-type": "application/pdf", etag: '"v1"' }, body: Buffer.alloc(3_000, 1) };
+    useSite();
+    const { source } = await addWebsite(ada);
+    const limits = services.websiteLimits;
+    services.websiteLimits = { quotaBytes: limits.quotaBytes, maxFileBytes: 2_000 };
+    const fetchedBig = () => site.requests.filter((request) => request.url === big).length;
+    try {
+      const first = await sync(ada, source.id);
+      expect(first.errors).toEqual([{ resource: "website_file", code: "file_too_large", http_status: null }]);
+      const files = (await ada.send("get", "/api/files")).body.items as { id: number; name: string }[];
+      expect(files.map((file) => file.name).sort()).toEqual(["lecture-01.pdf", "recording.pdf"]);
+      const listed = files.find((file) => file.name === "recording.pdf") as { id: number };
+      expect(listed).toMatchObject({ integrity_status: "TOO_LARGE", size_bytes: 3_000, source_url: big });
+      const download = await ada.send("get", `/api/files/${listed.id}/download`);
+      expect(download.status).toBe(404);
+      expect(download.body.code).toBe("FILE_TOO_LARGE");
+      expect(await db.websiteBlob.count()).toBe(1);
+      // Not a pending resource to retry: it was read as far as the limit allows.
+      expect((await ada.send("get", `/api/sources/${source.id}/website`)).body.pending).toEqual([]);
+      expect(fetchedBig()).toBe(1);
+
+      // The next sync lists it from memory without downloading it, and nothing is unhealthy.
+      const second = await sync(ada, source.id);
+      expect(second).toMatchObject({ state: "READY", errors: [] });
+      expect(fetchedBig()).toBe(1);
+      expect((await ada.send("get", "/api/files")).body.items).toHaveLength(2);
+      expect((await ada.send("get", "/api/sources")).body[0].health).toBe("HEALTHY");
+      expect(await db.changeEvent.count({ where: { userFacing: true } })).toBe(0);
+
+      // After a long while it is checked again, and once it fits it is stored like any other file.
+      await db.pendingResource.updateMany({ where: { url: big }, data: { lastAttemptAt: new Date(Date.now() - 8 * 24 * 3_600_000) } });
+      pages[big] = { status: 200, headers: { "content-type": "application/pdf" }, body: fixture("fake_protected.pdf") };
+      useSite();
+      await sync(ada, source.id);
+      expect(fetchedBig()).toBe(1);
+      const stored = ((await ada.send("get", "/api/files")).body.items as { name: string }[]).find((file) => file.name === "recording.pdf");
+      expect(stored).toMatchObject({ integrity_status: "VALID", source_url: null });
+    } finally {
+      services.websiteLimits = limits;
+    }
+  });
+
   it("keeps protected URLs pending, asks to sign in again, and retries them after re-authentication", async () => {
     const ada = await signUp();
     const { source } = await addWebsite(ada);
@@ -239,6 +321,53 @@ describe("course websites", () => {
     expect((await ada.send("patch", `/api/tasks/${third?.id}`, { body: { progress: 50 } })).status).toBe(200);
     const bad = await ada.send("put", `/api/sources/website/${source.id}`, { body: { ...ADD, authentication_method: "none", ntlm: undefined, week_1_monday: "2026-08-25" } });
     expect(bad.status).toBe(422);
+  });
+
+  it("takes homework deadlines from one schedule page and reports a page that disagrees", async () => {
+    const ada = await signUp();
+    pages[`${BASE}/`] = html(`${fixture("schedule_table.html")}<a href="old-term.html">Last term</a>`);
+    pages[`${BASE}/old-term.html`] = html(fixture("schedule_table.html").toString().replaceAll("Thursday", "Friday"));
+    useSite();
+    const { source } = await addWebsite(ada, { ...ADD, authentication_method: "none", ntlm: undefined, week_1_monday: "2026-08-24" });
+    const result = await sync(ada, source.id);
+    expect(result.errors).toEqual(expect.arrayContaining([{ resource: `website_schedule ${BASE}/old-term.html`, code: "schedule_conflict", http_status: null }]));
+    expect(await db.task.count({ where: { source: "WEBSITE", removedAt: null } })).toBe(13);
+    // Every deadline comes from the landing page's table, none from the older one.
+    const items = await db.sourceItem.findMany({ where: { kind: "ASSIGNMENT", removedAt: null } });
+    expect(items).toHaveLength(13);
+    for (const item of items) expect((item.content as { evidence: string }).evidence).not.toMatch(/Friday/);
+    expect(items.find((item) => item.title === "HW 3")?.content).toMatchObject({ due_at: "2026-09-17", evidence: "Week 4, Thursday: HW 3 due" });
+    // Syncing again changes nothing: the same page decides every time.
+    await sync(ada, source.id);
+    expect(await db.changeEvent.count({ where: { userFacing: true } })).toBe(0);
+  });
+
+  it("reads a .docx or .txt syllabus on the website like a page", async () => {
+    const ada = await signUp();
+    const policy =
+      "Grading policy: homework 30%, midterm 30%, final exam 40%. Late work loses 10%. Letter grades: A 93, B 83. Final grades are posted online. Office hours Tuesday. Attendance counts.";
+    const paragraph = (text: string, style = "") =>
+      `<w:p>${style ? `<w:pPr><w:pStyle w:val="${style}"/></w:pPr>` : ""}<w:r><w:t>${text}</w:t></w:r></w:p>`;
+    const docx = storedZip({
+      "[Content_Types].xml": "<Types/>",
+      "word/document.xml": `<w:document><w:body>${paragraph("Grading", "Heading1")}${paragraph(policy)}</w:body></w:document>`,
+    });
+    pages[`${BASE}/`] = html('<a href="week-0-handout.docx">Handout</a> <a href="notes.txt">Notes</a> <a href="reading.txt">Reading</a>');
+    pages[`${BASE}/week-0-handout.docx`] = { status: 200, headers: { "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }, body: docx };
+    pages[`${BASE}/notes.txt`] = { status: 200, headers: { "content-type": "text/plain" }, body: `Course notes\n\n${policy}` };
+    pages[`${BASE}/reading.txt`] = { status: 200, headers: { "content-type": "text/plain" }, body: "Read chapter 1 before Thursday." };
+    useSite();
+    const { source } = await addWebsite(ada, { ...ADD, authentication_method: "none", ntlm: undefined });
+    expect((await sync(ada, source.id)).errors).toEqual([]);
+    // Neither name says "syllabus": their text does.
+    const syllabus = (await ada.send("get", `/api/courses/${source.course_id}/syllabus`)).body;
+    expect(syllabus.found).toBe(true);
+    const titles = syllabus.sources.map((row: { title: string }) => row.title);
+    expect(titles.sort()).toEqual(["notes.txt", "week-0-handout.docx"]);
+    const handout = syllabus.sources.find((row: { title: string }) => row.title === "week-0-handout.docx");
+    expect(handout).toMatchObject({ kind: "file", download_url: expect.stringMatching(/^\/api\/files\/\d+\/download$/) });
+    expect(handout.blocks).toEqual([{ type: "heading", level: 1, text: "Grading" }, { type: "text", text: policy }]);
+    expect(handout.reasons).toEqual(expect.arrayContaining(["grading or policy section"]));
   });
 
   it("refuses private addresses on the real transport", async () => {
@@ -322,6 +451,64 @@ describe("gradescope", () => {
     const bob = await signUp({ username: "bob", email: "bob@example.com" });
     expect((await bob.send("get", `/api/tasks/${task.id}/provider-facts`)).status).toBe(404);
     expect((await bob.send("get", `/api/sources/${id}/assignments`)).status).toBe(404);
+  });
+
+  it("an unlinked source asks to link a course instead of failing, and the scheduler leaves it alone", async () => {
+    const ada = await signUp();
+    const { id, userId } = await gradescope(ada);
+    const synced = await ada.send("post", `/api/sources/${id}/sync`);
+    expect(synced.status).toBe(200);
+    expect(synced.body).toMatchObject({ state: "MAPPING_REQUIRED", items_seen: 0, errors: [] });
+    const row = await db.sourceConnection.findUniqueOrThrow({ where: { id } });
+    expect(row).toMatchObject({ state: "MAPPING_REQUIRED", health: "UNKNOWN", healthSummary: "Link a course to start syncing.", lastError: null, lastSuccessAt: null });
+    expect(row.diagnostics).toEqual([]);
+    expect((await ada.send("get", `/api/sources/${id}`)).body).toMatchObject({ state: "MAPPING_REQUIRED", health: "UNKNOWN" });
+
+    // Due by time, but nothing to read: the scheduler skips it until a course is linked.
+    await db.sourceConnection.updateMany({ where: { id }, data: { lastSyncAt: new Date(0) } });
+    expect(await services.sourceSyncs.startDue(60_000)).toBe(0);
+    const course = await db.course.create({
+      data: { userId, canvasId: "79", courseCode: "TEST 101", name: "Example", htmlUrl: "https://canvas.example/courses/79", lastSeenAt: new Date() },
+    });
+    expect((await ada.send("post", `/api/sources/${id}/course-mappings`, { body: { provider_course_id: "10", course_id: course.id } })).status).toBe(201);
+    expect(await db.sourceConnection.findUniqueOrThrow({ where: { id } })).toMatchObject({ state: "READY", healthSummary: null });
+    expect(await services.sourceSyncs.startDue(60_000)).toBe(1);
+    await services.sourceSyncs.whenIdle();
+    expect((await db.sourceConnection.findUniqueOrThrow({ where: { id } })).health).not.toBe("ERROR");
+  });
+
+  it("probes a new address through the guarded transport and never repeats what it answered", async () => {
+    const ada = await signUp();
+    const { id } = await gradescope(ada);
+    const credentials = services.credentials as { fetchImpl: typeof fetch };
+    const realFetch = credentials.fetchImpl;
+    credentials.fetchImpl = (() => {
+      throw new Error("the Canvas fetch must not probe a source address");
+    }) as typeof fetch;
+    try {
+      // The real transport (SOURCES_ALLOW_PRIVATE_HOSTS is off in tests) refuses private and loopback targets.
+      services.sourceTransport = realTransport;
+      for (const target of ["https://127.0.0.1:8443", "https://10.0.0.5", "https://[::1]:9443", "https://169.254.169.254"]) {
+        const refused = await ada.send("patch", `/api/sources/${id}`, { body: { base_url: target } });
+        expect(refused.status, target).toBe(422);
+        expect(refused.body.detail[0].msg).toBe("That address can't be used for a source. The current address was kept.");
+      }
+      // A public address that answers with an error is refused without its status code.
+      const other = "https://gradescope.example.org";
+      const site = fakeSite({ pages: { [`${other}/`]: { status: 404 } } });
+      services.sourceTransport = site.transport;
+      const failed = await ada.send("patch", `/api/sources/${id}`, { body: { base_url: other } });
+      expect(failed.status).toBe(422);
+      expect(JSON.stringify(failed.body)).not.toMatch(/404/);
+      expect(site.requests.map((request) => request.url)).toEqual([`${other}/`]);
+      // One that answers (or asks to sign in) is saved.
+      services.sourceTransport = fakeSite({ pages: { [`${other}/`]: { status: 401 } } }).transport;
+      const saved = await ada.send("patch", `/api/sources/${id}`, { body: { base_url: other } });
+      expect(saved.status).toBe(200);
+      expect(saved.body.base_url).toBe(other);
+    } finally {
+      credentials.fetchImpl = realFetch;
+    }
   });
 
   it("asks to sign in again when the session ended, and keeps PrairieLearn behind its guard", async () => {

@@ -87,7 +87,10 @@ export function fakeSite(options: FakeSiteOptions) {
             if (options.delayMs) await new Promise((resolve) => setTimeout(resolve, options.delayMs));
             const reply = handle(url, authorization);
             const body = Buffer.isBuffer(reply.body) ? reply.body : Buffer.from(reply.body ?? "");
-            if (body.length > limits.maxBytes) throw new TransportError("response_too_large");
+            if (body.length > limits.maxBytes) {
+              // Like the real transport: the status line and headers arrived, the body was cut off.
+              throw new TransportError("response_too_large", { url, status: reply.status, headers: reply.headers ?? {}, declaredBytes: body.length });
+            }
             return { url, status: reply.status, headers: reply.headers ?? {}, body };
           } finally {
             if (counted) authorizedInFlight--;

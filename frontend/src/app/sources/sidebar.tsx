@@ -10,6 +10,7 @@ import {
   quickPanelPosition,
   sourceState,
   sourceSubtitle,
+  stateLabel,
   sourceTone,
   syncFeedback,
   TONE_DOT,
@@ -222,7 +223,7 @@ function SourceDetails({
         <div>
           <dt>Status</dt>
           <dd>
-            <span className={`status-dot ${TONE_DOT[sourceTone(state)]}`} aria-hidden="true" /> {state.replaceAll("_", " ")}
+            <span className={`status-dot ${TONE_DOT[sourceTone(state)]}`} aria-hidden="true" /> {stateLabel(state)}
           </dd>
         </div>
         <div>

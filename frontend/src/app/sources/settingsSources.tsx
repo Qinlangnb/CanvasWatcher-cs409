@@ -8,7 +8,7 @@ import { SyncIcon } from "../icons";
 import { Alert, Badge, Dialog, EmptyState, Field, QueryError, SkeletonList, Spinner } from "../ui";
 import { AuthBrokerPanel, BrowserSignIn } from "./broker";
 import { CanvasEditDialog, CanvasSourceCard } from "./canvasCard";
-import { SOURCE_TYPE_LABELS, sourceState, sourceTone, syncFeedback, TONE_BADGE, type SourceConnection, type SourceType } from "./model";
+import { SOURCE_TYPE_LABELS, sourceState, sourceTone, stateLabel, syncFeedback, TONE_BADGE, type SourceConnection, type SourceType } from "./model";
 import "./plugins";
 import { useCanvasStatus, useCreateCanvasSource, useCredentialStorage, useDeleteSource, useSources, useSourcesLocked, useSyncSource } from "./queries";
 import { COMING_SOON, SOURCE_TYPES, sourceUi } from "./registry";
@@ -113,7 +113,7 @@ function ConnectionCard({ source }: { source: SourceConnection }) {
           <h3 id={`source-${source.id}`}>{source.name}</h3>
           <p className="source-url">{source.base_url}</p>
         </div>
-        <Badge tone={TONE_BADGE[sourceTone(state)]}>{state.replaceAll("_", " ")}</Badge>
+        <Badge tone={TONE_BADGE[sourceTone(state)]}>{stateLabel(state)}</Badge>
       </header>
       <p className="muted">
         {ui?.authNote?.(source) ??

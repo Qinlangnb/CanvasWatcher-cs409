@@ -19,6 +19,10 @@ export interface SourceContext {
   userId: string;
 }
 
+/** A signed-in provider source with no linked course: shown as "Link a course to start syncing", not as a failure. */
+export const MAPPING_REQUIRED = "MAPPING_REQUIRED";
+export const MAPPING_SUMMARY = "Link a course to start syncing.";
+
 export interface SourceSyncResult {
   /** READY, AUTH_REQUIRED, ERROR… stored on the connection. */
   state: string;

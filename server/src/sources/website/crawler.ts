@@ -41,6 +41,11 @@ export interface CrawlConfig {
   download?: boolean;
   /** Pending URLs from the last crawl, retried as explicit seeds. */
   retryUrls?: string[];
+  /**
+   * Files found too large to store on a recent sync: counted as seen and not downloaded again, so a
+   * big lecture recording isn't fetched up to the limit on every sync. They come back in `skipped`.
+   */
+  skipUrls?: Iterable<string>;
 }
 
 export interface CrawledPage {
@@ -61,10 +66,11 @@ export interface CrawledFile {
   title: string;
   filename: string;
   contentType: string | null;
-  /** Null when downloads are off or the bytes failed validation. */
+  /** Null when downloads are off, the bytes failed validation or the file is too large to store. */
   content: Buffer | null;
   size: number;
-  sha256: string;
+  /** Null for a file too large to read. */
+  sha256: string | null;
   integrity: IntegrityResult;
   etag: string | null;
   lastModified: string | null;
@@ -90,6 +96,8 @@ export interface CrawlResult {
   pages: CrawledPage[];
   files: CrawledFile[];
   pending: PendingResource[];
+  /** `skipUrls` found again this crawl: still on the site, not downloaded. */
+  skipped: string[];
   /** Sorted error codes for the source's last_error (`discovery_limit_reached` when truncated). */
   errors: string[];
   truncated: boolean;
@@ -231,6 +239,8 @@ export class WebsiteCrawler {
     const pages: CrawledPage[] = [];
     const files: CrawledFile[] = [];
     const pending: PendingResource[] = [];
+    const skip = new Set(this.config.skipUrls ?? []);
+    const skipped: string[] = [];
     let truncated = false;
     const redirectAllowed = (url: string) => this.allowed(url);
 
@@ -242,8 +252,17 @@ export class WebsiteCrawler {
         break;
       }
       seen.add(url);
+      if (skip.has(url)) {
+        skipped.push(url);
+        continue;
+      }
       const rule = this.authRuleFor(url);
       const result = await this.fetcher.fetch(url, rule, { redirectAllowed });
+      // Over the size limit: a file is listed without its bytes; an oversized page stays pending.
+      if (result.status === "ok" && result.tooLarge && (this.isFileUrl(url) || result.contentType !== "text/html")) {
+        files.push(this.oversized(url, title, result, rule));
+        continue;
+      }
       if (result.status !== "ok" || !result.content) {
         pending.push(this.pending(url, title, result, rule));
         continue;
@@ -285,7 +304,23 @@ export class WebsiteCrawler {
     if (truncated) errors.add("discovery_limit_reached");
     const invalidFiles = files.filter((file) => !file.integrity.valid).length;
     if (invalidFiles) errors.add("invalid_download");
-    return { pages, files, pending, errors: [...errors].sort(), truncated, health: crawlHealth(pending, truncated, invalidFiles) };
+    return { pages, files, pending, skipped, errors: [...errors].sort(), truncated, health: crawlHealth(pending, truncated, invalidFiles) };
+  }
+
+  private oversized(url: string, title: string, result: FetchResult, rule: AuthRule | null): CrawledFile {
+    return {
+      url,
+      title,
+      filename: safeFilename(url, null, result.contentType),
+      contentType: result.contentType,
+      content: null,
+      size: result.contentLength ?? 0,
+      sha256: null,
+      integrity: { valid: false, status: "TOO_LARGE", detectedExtension: null, reason: "file_too_large" },
+      etag: result.etag,
+      lastModified: result.lastModified,
+      credentialId: rule?.credentialId ?? null,
+    };
   }
 
   private file(url: string, title: string, result: FetchResult, rule: AuthRule | null): CrawledFile {

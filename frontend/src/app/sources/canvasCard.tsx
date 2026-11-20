@@ -357,6 +357,13 @@ export function AdvancedCanvasImport({ open, onToggle, baseUrl }: { open: boolea
 }
 
 /** Edit the Canvas source: name, address (probed before it replaces the old one) and default method. */
+/** What the Base URL field allows: an account signed in on one Canvas site can't move to another. */
+export function canvasAddressHint(bound: boolean): string {
+  return bound
+    ? "Signed in to an account on this Canvas site, so the address can't change here. To use a different Canvas site, use Disconnect and delete data in the Canvas section below (it deletes everything synced from Canvas), then add Canvas again with the new address."
+    : "No account is signed in yet, so you can change the address. Sign in afterwards.";
+}
+
 export function CanvasEditDialog({
   source,
   status,
@@ -375,6 +382,8 @@ export function CanvasEditDialog({
   const [method, setMethod] = useState<string>(status?.preferred_method ?? "");
   const fields = update.error instanceof ApiError ? update.error.fields : {};
   const general = update.error && Object.keys(fields).length === 0 ? update.error.message : null;
+  // A signed-in account belongs to its Canvas site; another site means Disconnect and delete data first.
+  const bound = Boolean(status?.account_id);
 
   useEffect(() => {
     if (!open) return;
@@ -391,7 +400,7 @@ export function CanvasEditDialog({
       {
         id: source.id,
         name: name.trim() || source.name,
-        ...(baseUrl.trim() !== source.base_url ? { base_url: baseUrl.trim() } : {}),
+        ...(!bound && baseUrl.trim() !== source.base_url ? { base_url: baseUrl.trim() } : {}),
         default_auth_method: (method || null) as CanvasMethod | null,
       },
       {
@@ -429,8 +438,9 @@ export function CanvasEditDialog({
           inputMode="url"
           value={baseUrl}
           onChange={(event) => setBaseUrl(event.target.value)}
+          readOnly={bound}
           error={fields.base_url}
-          hint="A new address signs out every method: sign in again afterwards."
+          hint={canvasAddressHint(bound)}
         />
         <SelectField label="Default authentication" value={method} onChange={(event) => setMethod(event.target.value)}>
           <option value="">Automatic (OAuth → PAT → Browser session)</option>

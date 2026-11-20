@@ -203,5 +203,69 @@ test("a broker registered for another site is told apart from one for this site"
   assert.match(model.brokerMessage("AUTH_CHALLENGE_INVALID"), /different CanvasWatcher site/);
   // Only a broker for this site enables sign-in; the panel says when it serves another one.
   assert.match(broker, /ready: running && site !== "other"/);
-  assert.match(broker, /Set up for another site/);
+  assert.equal(model.brokerHeadline("running", "other"), "Set up for another site");
+  assert.match(broker, /\{brokerHeadline\(status, site\)\}/);
+});
+
+test("an unlinked Gradescope source waits for a course link instead of reading as an error", () => {
+  const gradescope = { source_type: "gradescope", enabled: true, supported: true, state: "MAPPING_REQUIRED", health: "UNKNOWN" };
+  assert.equal(model.sourceState(gradescope, null), "MAPPING_REQUIRED");
+  assert.equal(model.sourceTone("MAPPING_REQUIRED"), "neutral");
+  assert.equal(model.stateLabel("MAPPING_REQUIRED"), "Link a course");
+  assert.equal(model.stateLabel("AUTH_REQUIRED"), "AUTH REQUIRED");
+  assert.equal(model.sourceSubtitle(gradescope, null), "Link a course to start syncing");
+  assert.deepEqual(model.syncFeedback({ state: "MAPPING_REQUIRED", errors: [] }), { ok: false, message: "Link a course to start syncing." });
+  // The card badge and the quick panel use the same words.
+  assert.match(section, /<Badge tone=\{TONE_BADGE\[sourceTone\(state\)\]\}>\{stateLabel\(state\)\}<\/Badge>/);
+  assert.match(sidebar, /aria-hidden="true" \/> \{stateLabel\(state\)\}/);
+});
+
+test("website files over the size limit and conflicting schedules have their own messages", () => {
+  assert.match(model.syncFeedback({ state: "READY", errors: [{ code: "file_too_large" }] }).message, /larger than this server stores/);
+  assert.match(model.syncFeedback({ state: "READY", errors: [{ code: "schedule_conflict" }] }).message, /schedule page only/);
+  const lists = read("app/lists.tsx");
+  assert.match(lists, /file\.integrity_status === "TOO_LARGE" \? " · too large to store" : ""/);
+  // No bytes to download: the file opens on the course website (http(s) only).
+  const guard = lists.indexOf("if (file.integrity_status === \"TOO_LARGE\") {");
+  assert.ok(guard > 0 && lists.indexOf("/^https?:\\/\\//i.test(file.source_url)", guard) > guard);
+  assert.ok(lists.indexOf("Open on website", guard) > guard);
+});
+
+test("a signed-in Canvas keeps its site; the edit dialog points at Disconnect for another one", () => {
+  // The server refuses to move a bound account (routes/sources.ts); the dialog says so up front.
+  assert.match(card, /const bound = Boolean\(status\?\.account_id\);/);
+  assert.match(card, /readOnly=\{bound\}/);
+  assert.match(card, /hint=\{canvasAddressHint\(bound\)\}/);
+  assert.match(card, /\.\.\.\(!bound && baseUrl\.trim\(\) !== source\.base_url \? \{ base_url: baseUrl\.trim\(\) \} : \{\}\)/);
+  assert.match(card, /To use a different Canvas site, use Disconnect and delete data in the Canvas section below/);
+  assert.doesNotMatch(card, /A new address signs out every method: sign in again afterwards\./);
+  const rules = new Set();
+  postcss.parse(css).walkRules((rule) => rules.add(rule.selector));
+  assert.ok(rules.has(".input-box:has(input[readonly])"));
+});
+
+test("a broker that answers but can't serve this site is never shown as not running", () => {
+  const hosted = { origin: "https://example.com", hostname: "example.com" };
+  // Nothing answered, or something that is not a broker.
+  assert.equal(model.brokerStatus(undefined), "absent");
+  assert.equal(model.brokerStatus({ state: "ok" }), "absent");
+  // Another protocol: outdated (or newer) broker, not a stopped one.
+  assert.equal(model.brokerStatus({ protocol_version: 2, backend_ready: true }), "incompatible");
+  assert.equal(model.brokerStatus({ protocol_version: 0 }), "incompatible");
+  assert.equal(model.brokerHeadline("incompatible", "unknown"), "Outdated");
+  assert.equal(model.brokerReady({ protocol_version: 2, backend_ready: true }), false);
+  // Protocol 1 but its backend does not answer: registered elsewhere, or this site is down.
+  const unreachable = (backend) => ({ protocol_version: 1, backend_ready: false, version: "0.8.0", backend });
+  assert.equal(model.brokerStatus(unreachable("https://example.com")), "no-backend");
+  assert.equal(model.brokerHeadline("no-backend", model.brokerSite(unreachable("https://example.com"), hosted, "/canvaswatcher")), "Set up for another site");
+  assert.equal(model.brokerHeadline("no-backend", model.brokerSite(unreachable("https://example.com/canvaswatcher"), hosted, "/canvaswatcher")), "Can't reach this site");
+  assert.equal(model.brokerHeadline("running", "this"), "Running");
+  assert.equal(model.brokerHeadline("absent", "unknown"), "Not running");
+  // The panel names the protocol mismatch and shows the update + register commands.
+  assert.match(broker, /status: BrokerStatus = health\.isError \? "absent" : brokerStatus\(health\.data\)/);
+  assert.match(broker, /speaks protocol version \{health\.data\?\.protocol_version\} and this site needs/);
+  assert.match(broker, /<BrokerReinstall reason="incompatible"/);
+  // A refusal from the broker keeps its code (AUTH_CHALLENGE_INVALID → "different CanvasWatcher site").
+  assert.match(broker, /error instanceof ApiError && error\.code !== "AUTH_BROKER_ERROR" \? error\.code : null/);
+  assert.match(model.brokerMessage("AUTH_BROKER_VERSION_UNSUPPORTED"), /too old/);
 });

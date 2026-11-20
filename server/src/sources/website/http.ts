@@ -16,8 +16,21 @@ export interface RawResponse {
 
 export type TransportErrorCode = "timeout" | "network_error" | "response_too_large" | "unsupported_scheme" | "address_not_allowed";
 
+/** What arrived before a response was cut off for being over `maxBytes`: enough to list a file without its bytes. */
+export interface OversizedResponse {
+  url: string;
+  status: number;
+  headers: IncomingHttpHeaders;
+  /** Content-Length when the server sent one. */
+  declaredBytes: number | null;
+}
+
 export class TransportError extends Error {
-  constructor(readonly code: TransportErrorCode) {
+  constructor(
+    readonly code: TransportErrorCode,
+    /** Set with `response_too_large`. */
+    readonly response: OversizedResponse | null = null,
+  ) {
     super(code);
   }
 }
@@ -107,12 +120,12 @@ export function nodeTransport(options: NodeTransportOptions = {}): HttpTransport
             }
             const module = protocol === "https:" ? https : http;
             let settled = false;
-            const fail = (code: TransportErrorCode) => {
+            const fail = (code: TransportErrorCode, oversized: OversizedResponse | null = null) => {
               if (settled) return;
               settled = true;
               clearTimeout(timer);
               request.destroy();
-              reject(new TransportError(code));
+              reject(new TransportError(code, oversized));
             };
             const request = module.request(
               target,
@@ -123,15 +136,21 @@ export function nodeTransport(options: NodeTransportOptions = {}): HttpTransport
               },
               (response) => {
                 const declared = Number(response.headers["content-length"]);
+                const oversized: OversizedResponse = {
+                  url,
+                  status: response.statusCode ?? 0,
+                  headers: response.headers,
+                  declaredBytes: response.headers["content-length"] !== undefined && Number.isFinite(declared) ? declared : null,
+                };
                 if (Number.isFinite(declared) && declared > limits.maxBytes) {
-                  fail("response_too_large");
+                  fail("response_too_large", oversized);
                   return;
                 }
                 const chunks: Buffer[] = [];
                 let size = 0;
                 response.on("data", (chunk: Buffer) => {
                   size += chunk.length;
-                  if (size > limits.maxBytes) fail("response_too_large");
+                  if (size > limits.maxBytes) fail("response_too_large", oversized);
                   else chunks.push(chunk);
                 });
                 response.on("end", () => {
